@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lattice Load Demo — Honeycomb &amp; Trabecular</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0e0f12; overflow: hidden; font-family: system-ui, sans-serif; }
+
+  #title-bar {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+    text-align: center; padding: 14px 12px 10px;
+    background: linear-gradient(rgba(10,10,13,0.85), rgba(10,10,13,0));
+    pointer-events: none;
+  }
+  #title-bar h1 {
+    margin: 0; color: #fff; font-size: 18px; font-weight: 600; letter-spacing: 0.2px;
+  }
+  #title-bar p {
+    margin: 4px 0 0; color: #9aa0a8; font-size: 12.5px;
+  }
+
+  #info {
+    position: absolute; top: 78px; left: 12px; color: #ddd; z-index: 10;
+    background: rgba(20,20,24,0.75); padding: 10px 14px; border-radius: 8px;
+    font-size: 13px; line-height: 1.5; max-width: 300px;
+  }
+  #info b { color: #fff; }
+  #info .hint {
+    display: block; margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,0.12);
+    color: #9aa0a8; font-size: 12px;
+  }
+  #info .close {
+    position: absolute; top: 6px; right: 8px; cursor: pointer;
+    color: #8a9099; font-size: 14px; line-height: 1; pointer-events: auto;
+    background: none; border: none; padding: 4px;
+  }
+  #info .close:hover { color: #fff; }
+  #info.collapsed .body { display: none; }
+
+  #legend {
+    position: absolute; bottom: 16px; left: 12px; z-index: 10;
+    background: rgba(20,20,24,0.75); padding: 10px 14px; border-radius: 8px;
+    color: #ddd; font-size: 12.5px;
+  }
+  #legend .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  #legend .bar {
+    width: 120px; height: 10px; border-radius: 5px;
+  }
+  #legend .tension-bar { background: linear-gradient(to right, #ffffff, #ff2b2b); }
+  #legend .compression-bar { background: linear-gradient(to right, #ffffff, #2b6bff); }
+  #legend .label { min-width: 92px; }
+  #legend .scale { color: #8a9099; font-size: 11px; margin-top: 2px; }
+
+  #stats {
+    position: absolute; bottom: 16px; right: 12px; z-index: 10;
+    background: rgba(20,20,24,0.75); padding: 10px 14px; border-radius: 8px;
+    color: #ddd; font-size: 12.5px; min-width: 190px;
+  }
+  #stats .row { display: flex; justify-content: space-between; gap: 14px; margin: 3px 0; }
+  #stats .row span:first-child { color: #9aa0a8; }
+  #stats .tension-value { color: #ff6b6b; font-variant-numeric: tabular-nums; }
+  #stats .compression-value { color: #6b9bff; font-variant-numeric: tabular-nums; }
+
+  #loading {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    z-index: 20; color: #ddd; font-size: 13px; background: rgba(20,20,24,0.85);
+    padding: 8px 16px; border-radius: 8px; display: none;
+  }
+
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<div id="title-bar">
+  <h1>Lattice Load Demo</h1>
+  <p>Honeycomb &amp; trabecular bone-analog lattices, solved live with the direct stiffness method</p>
+</div>
+
+<div id="info">
+  <button class="close" title="Hide">✕</button>
+  <div class="body">
+    <b>Structural analysis</b> — base layer fixed, load distributed across the
+    top layer, red/blue updates live as you drag any slider.<br/>
+    <b>Cross-section reference</b> — solid 3D models of an actual honeycomb
+    cell block and a bone cross-section (cortical shell + spongy interior),
+    for visual comparison against the truss idealizations above.
+    <span class="hint">🖱 Drag to orbit · scroll to zoom · right-drag to pan</span>
+  </div>
+</div>
+
+<div id="legend">
+  <div class="row"><span class="label">Tension (pulling)</span><span class="bar tension-bar"></span></div>
+  <div class="row"><span class="label">Compression (pushing)</span><span class="bar compression-bar"></span></div>
+  <div class="scale">white = ~0 force · saturated = force at max load (20,000 N)</div>
+</div>
+
+<div id="stats">
+  <div class="row"><span>Lattice type</span><span id="stat-type">—</span></div>
+  <div class="row"><span>Nodes / struts</span><span id="stat-count">—</span></div>
+  <div class="row"><span>Max tension</span><span class="tension-value" id="stat-tension">—</span></div>
+  <div class="row"><span>Max compression</span><span class="compression-value" id="stat-compression">—</span></div>
+</div>
+
+<div id="loading">Solving…</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.140.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19/dist/lil-gui.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-delaunay@6.0.4/dist/d3-delaunay.min.js"></script>
+<script src="solver.js"></script>
+<script src="generators.js"></script>
+<script src="crosssection.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
