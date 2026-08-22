@@ -83,6 +83,23 @@
 
   canvas { display: block; touch-action: none; }
 
+  /* top-right is already occupied by the lil-gui controls panel, so this
+     sits top-left instead — the one clear spot before #info starts at
+     top: 78px */
+  #industry-link {
+    position: absolute; top: 12px; left: 12px; z-index: 10;
+    font-family: 'IBM Plex Mono', monospace, monospace;
+    font-size: 12px; letter-spacing: 0.06em; text-decoration: none;
+    color: #5fd0e0; background: rgba(20,20,24,0.7);
+    border: 1px solid #2a3038; padding: 8px 12px; border-radius: 4px;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  #industry-link:hover { border-color: #5fd0e0; background: rgba(95,208,224,0.08); }
+
+  @media (max-width: 700px) {
+    #industry-link { left: 8px; font-size: 10.5px; padding: 6px 10px; }
+  }
+
   /* ---- mobile / narrow-viewport layout ---- */
   @media (max-width: 700px) {
     #title-bar { padding: 10px 8px 6px; }
@@ -119,6 +136,8 @@
   <h1>Lattice Load Demo</h1>
   <p>Honeycomb &amp; trabecular bone-analog lattices, solved live with the direct stiffness method</p>
 </div>
+
+<a id="industry-link" href="industry.html">MANUFACTURING &amp; INDUSTRY &rarr;</a>
 
 <div id="info">
   <button class="close" title="Hide">✕</button>
