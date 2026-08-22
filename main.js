@@ -281,7 +281,16 @@ function requestRegenerate() { regenDirty = true; }
 function requestResolve() { resolveDirty = true; }
 
 // ---------- GUI ----------
-const gui = new lil.GUI({ title: 'Controls', width: 300 });
+// On narrow/mobile viewports, start with the controls panel collapsed
+// (tap the title bar to expand) and the info box collapsed, so the 3D
+// view isn't mostly covered by text on first load.
+const isMobile = window.innerWidth < 700;
+
+const gui = new lil.GUI({ title: 'Controls', width: isMobile ? Math.min(260, window.innerWidth - 20) : 300 });
+if (isMobile) {
+  gui.close();
+  infoEl.classList.add('collapsed');
+}
 
 const viewFolder = gui.addFolder('View');
 viewFolder.add(params, 'view', ['Structural analysis', 'Cross-section reference'])
