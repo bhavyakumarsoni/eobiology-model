@@ -110,7 +110,8 @@
   <button class="close" title="Hide">✕</button>
   <div class="body">
     <b>Structural analysis</b> — base layer fixed, load distributed across the
-    top layer, red/blue updates live as you drag any slider.<br/>
+    top layer (highlighted, with a yellow arrow showing the push direction),
+    red/blue updates live as you drag any slider.<br/>
     <b>Cross-section reference</b> — solid 3D models of an actual honeycomb
     cell block and a bone cross-section (cortical shell + spongy interior),
     for visual comparison against the truss idealizations above.
@@ -127,6 +128,7 @@
 <div id="stats">
   <div class="row"><span>Lattice type</span><span id="stat-type">—</span></div>
   <div class="row"><span>Nodes / struts</span><span id="stat-count">—</span></div>
+  <div class="row"><span>Applied load</span><span id="stat-load">—</span></div>
   <div class="row"><span>Max tension</span><span class="tension-value" id="stat-tension">—</span></div>
   <div class="row"><span>Max compression</span><span class="compression-value" id="stat-compression">—</span></div>
 </div>

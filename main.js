@@ -4,14 +4,16 @@
 // cross-section view (crosssection.js) of the real specimens
 // these lattices are modeled after.
 //
-// LIVE-UPDATE NOTE: solveTruss() is a dense O(n^3) solve (~30ms
-// at this lattice size) and lattice regeneration builds a Voronoi
-// diagram — neither is free, so instead of running them directly
-// inside each GUI onChange (which fires many times per second
-// while dragging and would pile up/stall the main thread), every
-// slider just sets a "dirty" flag. The render loop checks the
-// flags and does at most ONE regenerate/solve per rendered frame.
-// That's what makes every control feel live without freezing.
+// LIVE-UPDATE NOTE: lattice regeneration (Voronoi build + one sparse
+// solveTruss() call) isn't free, so instead of running it directly inside
+// the shape-slider onChange (which fires many times per second while
+// dragging and would pile up/stall the main thread), those sliders just
+// set a "dirty" flag; the render loop does at most ONE regenerate per
+// rendered frame. The load slider doesn't even need that: strut forces
+// scale linearly with load for a fixed structure, so it's solved once at
+// LOAD_MAX per regeneration and every load-slider tick just rescales that
+// cached result — no solve at all, so it's exactly as fast at 20,000 N as
+// at 0 N, no matter how dense the lattice is.
 // ============================================================
 
 // ---------- scene setup ----------
@@ -40,6 +42,34 @@ scene.add(fillLight);
 const gridHelper = new THREE.GridHelper(20, 20, 0x333333, 0x1c1c1c);
 scene.add(gridHelper);
 
+// ---------- load direction indicator ----------
+// A translucent highlight over the loaded face (the top layer, where
+// generators.js's loadNodeIndices always sit) plus an arrow showing the
+// force direction (-Y, i.e. pushing down into that face) and roughly
+// scaling with magnitude, so it's visually obvious where and which way
+// the load is applied — not just inferable from the color pattern.
+const loadFaceHighlight = new THREE.Mesh(
+  new THREE.PlaneGeometry(1, 1),
+  new THREE.MeshBasicMaterial({ color: 0xffcc33, transparent: true, opacity: 0.14, side: THREE.DoubleSide, depthWrite: false })
+);
+loadFaceHighlight.rotation.x = -Math.PI / 2;
+scene.add(loadFaceHighlight);
+
+const loadArrow = new THREE.ArrowHelper(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 0), 1, 0xffcc33, 0.4, 0.22);
+scene.add(loadArrow);
+
+function updateLoadIndicators() {
+  const topY = (LAYERS - 1) * LAYER_HEIGHT;
+  loadFaceHighlight.scale.set(LATTICE_BOUNDS_X, LATTICE_BOUNDS_Z, 1);
+  loadFaceHighlight.position.set(LATTICE_BOUNDS_X / 2, topY + 0.015, LATTICE_BOUNDS_Z / 2);
+
+  // arrow length reacts to load magnitude (1.2 at 0N up to 3.0 at LOAD_MAX)
+  // so the indicator itself gives a rough at-a-glance sense of load level.
+  const arrowLen = 1.2 + 1.8 * (params.loadMagnitude / LOAD_MAX);
+  loadArrow.position.set(LATTICE_BOUNDS_X / 2, topY + arrowLen + 0.3, LATTICE_BOUNDS_Z / 2);
+  loadArrow.setLength(arrowLen, arrowLen * 0.28, arrowLen * 0.16);
+}
+
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -57,6 +87,7 @@ const LOAD_MAX = 20000; // N — top of the load slider, also the color-scale ca
 const params = {
   view: 'Structural analysis', // 'Structural analysis' | 'Cross-section reference'
   latticeType: 'Honeycomb',    // 'Honeycomb' | 'Trabecular'
+  renderStyle: 'Rods',         // 'Rods' | 'Solid walls' (honeycomb only)
   cellSize: 1,
   poreSize: 1,
   loadMagnitude: 5000, // N, total, distributed across top-layer nodes, -Y
@@ -69,6 +100,7 @@ let loadNodeIndices = [];
 // ---------- HUD wiring ----------
 const statTypeEl = document.getElementById('stat-type');
 const statCountEl = document.getElementById('stat-count');
+const statLoadEl = document.getElementById('stat-load');
 const statTensionEl = document.getElementById('stat-tension');
 const statCompressionEl = document.getElementById('stat-compression');
 
@@ -135,6 +167,58 @@ function rebuildStrutInstances() {
   scene.add(strutMesh);
 }
 
+// ---------- honeycomb "solid walls" render style ----------
+// Renders the same physics (same struts, same solve) as actual hex cell
+// walls instead of rods: one flat panel per 'wall'-role strut (the real
+// hexagon edges — see generators.js), skipping the vertical/diagonal
+// bracing rods and node spheres entirely, since those aren't part of a
+// real honeycomb's visible structure, just the extra members a 3D
+// pin-jointed idealization needs for shear stiffness.
+const WALL_THICKNESS = 0.06;
+const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
+const wallMaterial = new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.08 });
+let wallMesh = null;
+let wallIndices = [];
+
+function rebuildWallInstances() {
+  if (wallMesh) scene.remove(wallMesh);
+  wallIndices = [];
+  for (let i = 0; i < struts.length; i++) {
+    if (struts[i].role === 'wall') wallIndices.push(i);
+  }
+  if (wallIndices.length === 0) {
+    wallMesh = null;
+    return;
+  }
+
+  wallMesh = new THREE.InstancedMesh(UNIT_BOX, wallMaterial, wallIndices.length);
+
+  wallIndices.forEach((si, i) => {
+    const s = struts[si];
+    const ni = nodes[s.a], nj = nodes[s.b];
+    const dx = nj.x - ni.x, dz = nj.z - ni.z;
+    const len = Math.max(Math.hypot(dx, dz), 1e-6);
+    const angle = Math.atan2(dz, dx);
+
+    dummy.position.set((ni.x + nj.x) / 2, ni.y, (ni.z + nj.z) / 2);
+    dummy.rotation.set(0, -angle, 0);
+    dummy.scale.set(len, LAYER_HEIGHT, WALL_THICKNESS);
+    dummy.updateMatrix();
+    wallMesh.setMatrixAt(i, dummy.matrix);
+  });
+  wallMesh.instanceMatrix.needsUpdate = true;
+  scene.add(wallMesh);
+}
+
+function updateWallColors(strutForces) {
+  if (!wallMesh) return;
+  for (let i = 0; i < wallIndices.length; i++) {
+    forceToColor(strutForces[wallIndices[i]], colorScaleMax, _color);
+    wallMesh.setColorAt(i, _color);
+  }
+  wallMesh.instanceColor.needsUpdate = true;
+}
+
 function forceToColor(force, maxAbs, target) {
   const t = maxAbs > 1e-9 ? Math.min(Math.abs(force) / maxAbs, 1) : 0;
   if (force >= 0) {
@@ -145,22 +229,33 @@ function forceToColor(force, maxAbs, target) {
 
 const _color = new THREE.Color();
 
-// Colour scale is calibrated to LOAD_MAX, not to whatever the current
-// solve's own max force happens to be. Forces in a linear-elastic truss
-// scale linearly with load, so the *relative* pattern between struts is
-// identical at 500N and 20000N — normalizing per-solve always pins the
-// worst strut to full saturation and makes the load slider look like it
-// does nothing to color. Normalizing against a fixed reference (the
-// forces produced at the slider's max load) makes low loads render pale
-// and high loads render fully saturated, like the load actually matters.
+// PERFORMANCE: the load slider used to trigger a full solveTruss() call
+// (sparse assembly + CG solve) on every tick. That's wasted work — moving
+// the load slider never changes the structure's stiffness, only the
+// *magnitude* of the force vector, and for a linear-elastic truss the
+// resulting strut forces scale exactly linearly with load. So we solve
+// ONCE per lattice regeneration at a reference load (LOAD_MAX) and cache
+// it; every load-slider tick after that is just an O(struts) scalar
+// multiply of the cached result — no solve, no lag, no matter how dense
+// the lattice is. This also doubles as the color-scale calibration
+// (colorScaleMax is just the cached reference's own max), so regenerating
+// only needs a single solve total instead of two.
+let refStrutForces = null;
 let colorScaleMax = 1e-9;
 
-function calibrateColorScale() {
+function solveReferenceAtMaxLoad() {
   const loads = new Map();
   const forcePerNode = -LOAD_MAX / loadNodeIndices.length;
   for (const idx of loadNodeIndices) loads.set(idx, [0, forcePerNode, 0]);
   const { strutForces } = solveTruss(nodes, struts, loads);
-  colorScaleMax = Math.max(...strutForces.map((f) => Math.abs(f)), 1e-9);
+  refStrutForces = strutForces;
+
+  let maxAbs = 1e-9;
+  for (let i = 0; i < refStrutForces.length; i++) {
+    const a = Math.abs(refStrutForces[i]);
+    if (a > maxAbs) maxAbs = a;
+  }
+  colorScaleMax = maxAbs;
 }
 
 function updateStrutColors(strutForces) {
@@ -199,34 +294,40 @@ function regenerateLattice() {
 
   rebuildNodeInstances();
   rebuildStrutInstances();
-  calibrateColorScale();
+  rebuildWallInstances();
+  solveReferenceAtMaxLoad();
+  applyRenderStyle();
 
-  statTypeEl.textContent = params.latticeType;
-  statCountEl.textContent = `${nodes.length} / ${struts.length}`;
-}
-
-// ---------- solve ----------
-function resolveAndRender() {
-  const loads = new Map();
-  const forcePerNode = -params.loadMagnitude / loadNodeIndices.length;
-  for (const idx of loadNodeIndices) {
-    loads.set(idx, [0, forcePerNode, 0]);
-  }
-
-  const { strutForces } = solveTruss(nodes, struts, loads);
-
-  const maxAbs = Math.max(...strutForces.map((f) => Math.abs(f)), 0);
-  if (!Number.isFinite(maxAbs) || maxAbs === 0) {
+  if (!Number.isFinite(colorScaleMax) || colorScaleMax <= 1e-9) {
     console.warn(
       'solveTruss returned all-zero or non-finite strut forces — ' +
       'check for a planar/under-braced lattice or NaNs in the stiffness matrix.'
     );
   }
 
-  updateStrutColors(strutForces);
+  statTypeEl.textContent = params.latticeType;
+  statCountEl.textContent = `${nodes.length} / ${struts.length}`;
+}
 
-  const maxTension = Math.max(0, ...strutForces);
-  const maxCompression = Math.abs(Math.min(0, ...strutForces));
+// ---------- render current load (no solve — scales the cached reference) ----------
+function resolveAndRender() {
+  const scale = params.loadMagnitude / LOAD_MAX;
+  const strutForces = new Float64Array(refStrutForces.length);
+
+  let maxTension = 0;
+  let maxCompression = 0;
+  for (let i = 0; i < strutForces.length; i++) {
+    const f = refStrutForces[i] * scale;
+    strutForces[i] = f;
+    if (f > maxTension) maxTension = f;
+    if (-f > maxCompression) maxCompression = -f;
+  }
+
+  updateStrutColors(strutForces);
+  updateWallColors(strutForces);
+  updateLoadIndicators();
+
+  statLoadEl.textContent = `${params.loadMagnitude.toFixed(0)} N ↓ (top face)`;
   statTensionEl.textContent = `${maxTension.toFixed(0)} N`;
   statCompressionEl.textContent = `${maxCompression.toFixed(0)} N`;
 }
@@ -252,17 +353,33 @@ function recenterCrossSection() {
   camera.position.set(0.5, b.height * 0.8, Math.max(b.width, 6));
 }
 
+// 'Solid walls' is a honeycomb-only rendering choice: same physics, same
+// solve, just draws the hexagon-edge ('wall'-role) struts as flat panels
+// and hides the vertical/diagonal bracing rods + node spheres, since
+// those aren't part of what a real honeycomb cell looks like.
+function applyRenderStyle() {
+  const structural = params.view === 'Structural analysis';
+  const wallsMode = structural && params.latticeType === 'Honeycomb' && params.renderStyle === 'Solid walls';
+
+  if (nodeMesh) nodeMesh.visible = structural && !wallsMode;
+  if (strutMesh) strutMesh.visible = structural && !wallsMode;
+  if (wallMesh) wallMesh.visible = wallsMode;
+
+  gridHelper.visible = structural;
+  loadFaceHighlight.visible = structural;
+  loadArrow.visible = structural;
+}
+
 function applyView() {
   const structural = params.view === 'Structural analysis';
 
-  if (nodeMesh) nodeMesh.visible = structural;
-  if (strutMesh) strutMesh.visible = structural;
-  gridHelper.visible = structural;
+  applyRenderStyle();
 
   structureFolder.show(structural);
   loadFolder.show(structural);
   cellSizeCtrl.show(structural && params.latticeType === 'Honeycomb');
   poreSizeCtrl.show(structural && params.latticeType === 'Trabecular');
+  renderStyleCtrl.show(structural && params.latticeType === 'Honeycomb');
 
   if (structural) {
     if (crossSectionGroup) crossSectionGroup.visible = false;
@@ -305,8 +422,13 @@ const latticeTypeCtrl = structureFolder.add(params, 'latticeType', ['Honeycomb',
   .onChange(() => {
     cellSizeCtrl.show(params.latticeType === 'Honeycomb');
     poreSizeCtrl.show(params.latticeType === 'Trabecular');
+    renderStyleCtrl.show(params.latticeType === 'Honeycomb');
     requestRegenerate();
   });
+
+const renderStyleCtrl = structureFolder.add(params, 'renderStyle', ['Rods', 'Solid walls'])
+  .name('Render style')
+  .onChange(() => applyRenderStyle());
 
 const cellSizeCtrl = structureFolder.add(params, 'cellSize', 0.3, 2.5, 0.05)
   .name('Cell size')
@@ -327,6 +449,7 @@ loadFolder.open();
 
 cellSizeCtrl.show(params.latticeType === 'Honeycomb');
 poreSizeCtrl.show(params.latticeType === 'Trabecular');
+renderStyleCtrl.show(params.latticeType === 'Honeycomb');
 
 // initial build (after GUI controls exist, since applyView() shows/hides them)
 regenerateLattice();
