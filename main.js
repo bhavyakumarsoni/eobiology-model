@@ -58,15 +58,31 @@ scene.add(loadFaceHighlight);
 const loadArrow = new THREE.ArrowHelper(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 0), 1, 0xffcc33, 0.4, 0.22);
 scene.add(loadArrow);
 
-function updateLoadIndicators() {
-  const topY = (LAYERS - 1) * LAYER_HEIGHT;
-  loadFaceHighlight.scale.set(LATTICE_BOUNDS_X, LATTICE_BOUNDS_Z, 1);
-  loadFaceHighlight.position.set(LATTICE_BOUNDS_X / 2, topY + 0.015, LATTICE_BOUNDS_Z / 2);
+// Ring marker for 'Point' load mode — shows exactly which node the load
+// is pinned to (the face highlight only makes sense for the distributed
+// top-face load, so it's swapped out for this in point mode).
+const pointMarker = new THREE.Mesh(
+  new THREE.RingGeometry(0.14, 0.2, 24),
+  new THREE.MeshBasicMaterial({ color: 0xffcc33, side: THREE.DoubleSide, transparent: true, opacity: 0.95, depthWrite: false })
+);
+pointMarker.rotation.x = -Math.PI / 2;
+scene.add(pointMarker);
 
+function updateLoadIndicators() {
   // arrow length reacts to load magnitude (1.2 at 0N up to 3.0 at LOAD_MAX)
   // so the indicator itself gives a rough at-a-glance sense of load level.
   const arrowLen = 1.2 + 1.8 * (params.loadMagnitude / LOAD_MAX);
-  loadArrow.position.set(LATTICE_BOUNDS_X / 2, topY + arrowLen + 0.3, LATTICE_BOUNDS_Z / 2);
+
+  if (params.loadMode === 'Point' && pointLoadNodeIndex != null && nodes[pointLoadNodeIndex]) {
+    const n = nodes[pointLoadNodeIndex];
+    pointMarker.position.set(n.x, n.y + 0.01, n.z);
+    loadArrow.position.set(n.x, n.y + arrowLen + 0.25, n.z);
+  } else {
+    const topY = (LAYERS - 1) * LAYER_HEIGHT;
+    loadFaceHighlight.scale.set(LATTICE_BOUNDS_X, LATTICE_BOUNDS_Z, 1);
+    loadFaceHighlight.position.set(LATTICE_BOUNDS_X / 2, topY + 0.015, LATTICE_BOUNDS_Z / 2);
+    loadArrow.position.set(LATTICE_BOUNDS_X / 2, topY + arrowLen + 0.3, LATTICE_BOUNDS_Z / 2);
+  }
   loadArrow.setLength(arrowLen, arrowLen * 0.28, arrowLen * 0.16);
 }
 
@@ -88,14 +104,17 @@ const params = {
   view: 'Structural analysis', // 'Structural analysis' | 'Cross-section reference'
   latticeType: 'Honeycomb',    // 'Honeycomb' | 'Trabecular'
   renderStyle: 'Rods',         // 'Rods' | 'Solid walls' (honeycomb only)
+  loadMode: 'Distributed',     // 'Distributed' (whole top face) | 'Point' (single clicked node)
   cellSize: 1,
   poreSize: 1,
-  loadMagnitude: 5000, // N, total, distributed across top-layer nodes, -Y
+  loadMagnitude: 5000, // N, total, -Y
 };
 
 let nodes = [];
 let struts = [];
 let loadNodeIndices = [];
+let nodeIncidentStruts = []; // nodeIncidentStruts[nodeIndex] -> array of strut indices touching it
+let pointLoadNodeIndex = null; // selected node for 'Point' load mode
 
 // ---------- HUD wiring ----------
 const statTypeEl = document.getElementById('stat-type');
@@ -121,7 +140,9 @@ let strutMesh = null;
 
 const NODE_RADIUS = STRUT_RADIUS * 1.15;
 const NODE_GEO = new THREE.SphereGeometry(1, 16, 16);
-const nodeMaterial = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.4, metalness: 0.1 });
+// Pure white base so per-instance colors (set via setColorAt, which
+// multiplies against this) come through undistorted.
+const nodeMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4, metalness: 0.1 });
 let nodeMesh = null;
 
 const dummy = new THREE.Object3D();
@@ -244,9 +265,10 @@ let refStrutForces = null;
 let colorScaleMax = 1e-9;
 
 function solveReferenceAtMaxLoad() {
+  const idxs = activeLoadNodeIndices();
   const loads = new Map();
-  const forcePerNode = -LOAD_MAX / loadNodeIndices.length;
-  for (const idx of loadNodeIndices) loads.set(idx, [0, forcePerNode, 0]);
+  const forcePerNode = -LOAD_MAX / idxs.length;
+  for (const idx of idxs) loads.set(idx, [0, forcePerNode, 0]);
   const { strutForces } = solveTruss(nodes, struts, loads);
   refStrutForces = strutForces;
 
@@ -256,6 +278,18 @@ function solveReferenceAtMaxLoad() {
     if (a > maxAbs) maxAbs = a;
   }
   colorScaleMax = maxAbs;
+
+  refNodeIntensity = new Float64Array(nodes.length);
+  for (let ni = 0; ni < nodes.length; ni++) {
+    let sum = 0;
+    for (const si of nodeIncidentStruts[ni]) sum += Math.abs(refStrutForces[si]);
+    refNodeIntensity[ni] = sum;
+  }
+  let maxNode = 1e-9;
+  for (let i = 0; i < refNodeIntensity.length; i++) {
+    if (refNodeIntensity[i] > maxNode) maxNode = refNodeIntensity[i];
+  }
+  nodeColorScaleMax = maxNode;
 }
 
 function updateStrutColors(strutForces) {
@@ -264,6 +298,59 @@ function updateStrutColors(strutForces) {
     strutMesh.setColorAt(i, _color);
   }
   strutMesh.instanceColor.needsUpdate = true;
+}
+
+// ---------- node "weight distribution" coloring ----------
+// A node doesn't have its own tension/compression the way a strut does —
+// it's just a joint. What we can show is how much force is passing
+// through that joint: the sum of |force| over every strut incident to
+// it. White = ~0 (barely loaded), amber = heavily loaded, on the same
+// LOAD_MAX-calibrated + linear-rescale scheme as the struts/walls, so
+// dragging the load slider updates node color live with no extra solve.
+let refNodeIntensity = null;
+let nodeColorScaleMax = 1e-9;
+
+function intensityToColor(intensity, maxIntensity, target) {
+  const t = maxIntensity > 1e-9 ? Math.min(intensity / maxIntensity, 1) : 0;
+  return target.setRGB(1, 1 - 0.55 * t, 1 - 0.85 * t); // white -> amber
+}
+
+function updateNodeColors(nodeIntensity) {
+  if (!nodeMesh) return;
+  for (let i = 0; i < nodeIntensity.length; i++) {
+    intensityToColor(nodeIntensity[i], nodeColorScaleMax, _color);
+    nodeMesh.setColorAt(i, _color);
+  }
+  nodeMesh.instanceColor.needsUpdate = true;
+}
+
+function buildIncidence() {
+  nodeIncidentStruts = Array.from({ length: nodes.length }, () => []);
+  struts.forEach((s, i) => {
+    nodeIncidentStruts[s.a].push(i);
+    nodeIncidentStruts[s.b].push(i);
+  });
+}
+
+// which node(s) the load is actually applied to right now
+function activeLoadNodeIndices() {
+  return params.loadMode === 'Point' && pointLoadNodeIndex != null
+    ? [pointLoadNodeIndex]
+    : loadNodeIndices;
+}
+
+// default point-load target: the top-face node closest to the center,
+// so switching into Point mode (or regenerating while in it) never
+// leaves pointLoadNodeIndex pointing at a node that no longer exists
+function pickDefaultPointLoadNode() {
+  const cx = LATTICE_BOUNDS_X / 2, cz = LATTICE_BOUNDS_Z / 2;
+  let best = loadNodeIndices[0], bestD = Infinity;
+  for (const idx of loadNodeIndices) {
+    const n = nodes[idx];
+    const d = (n.x - cx) ** 2 + (n.z - cz) ** 2;
+    if (d < bestD) { bestD = d; best = idx; }
+  }
+  return best;
 }
 
 // ---------- generation ----------
@@ -291,10 +378,12 @@ function regenerateLattice() {
   nodes = result.nodes;
   struts = result.struts;
   loadNodeIndices = result.loadNodeIndices;
+  pointLoadNodeIndex = pickDefaultPointLoadNode();
 
   rebuildNodeInstances();
   rebuildStrutInstances();
   rebuildWallInstances();
+  buildIncidence();
   solveReferenceAtMaxLoad();
   applyRenderStyle();
 
@@ -323,11 +412,18 @@ function resolveAndRender() {
     if (-f > maxCompression) maxCompression = -f;
   }
 
+  const nodeIntensity = new Float64Array(refNodeIntensity.length);
+  for (let i = 0; i < nodeIntensity.length; i++) nodeIntensity[i] = refNodeIntensity[i] * scale;
+
   updateStrutColors(strutForces);
   updateWallColors(strutForces);
+  updateNodeColors(nodeIntensity);
   updateLoadIndicators();
 
-  statLoadEl.textContent = `${params.loadMagnitude.toFixed(0)} N ↓ (top face)`;
+  const where = params.loadMode === 'Point' && pointLoadNodeIndex != null
+    ? `node #${pointLoadNodeIndex}`
+    : 'top face';
+  statLoadEl.textContent = `${params.loadMagnitude.toFixed(0)} N ↓ (${where})`;
   statTensionEl.textContent = `${maxTension.toFixed(0)} N`;
   statCompressionEl.textContent = `${maxCompression.toFixed(0)} N`;
 }
@@ -366,7 +462,9 @@ function applyRenderStyle() {
   if (wallMesh) wallMesh.visible = wallsMode;
 
   gridHelper.visible = structural;
-  loadFaceHighlight.visible = structural;
+  const pointMode = structural && params.loadMode === 'Point';
+  loadFaceHighlight.visible = structural && !pointMode;
+  pointMarker.visible = pointMode;
   loadArrow.visible = structural;
 }
 
@@ -374,6 +472,7 @@ function applyView() {
   const structural = params.view === 'Structural analysis';
 
   applyRenderStyle();
+  updatePointHint();
 
   structureFolder.show(structural);
   loadFolder.show(structural);
@@ -439,6 +538,18 @@ const poreSizeCtrl = structureFolder.add(params, 'poreSize', 0.3, 2.5, 0.05)
   .onChange(() => requestRegenerate());
 
 const loadFolder = gui.addFolder('Load');
+const loadModeCtrl = loadFolder.add(params, 'loadMode', ['Distributed', 'Point'])
+  .name('Load placement')
+  .onChange(() => {
+    // switching load pattern changes the force vector's shape, not just
+    // its magnitude, so this needs a real resolve (still just one solve,
+    // not a per-frame cost) rather than the load-slider's free rescale.
+    solveReferenceAtMaxLoad();
+    resolveAndRender();
+    applyRenderStyle();
+    updatePointHint();
+  });
+
 const loadCtrl = loadFolder.add(params, 'loadMagnitude', 0, LOAD_MAX, 100)
   .name('Load (N)')
   .onChange(() => requestResolve());
@@ -446,6 +557,46 @@ const loadCtrl = loadFolder.add(params, 'loadMagnitude', 0, LOAD_MAX, 100)
 viewFolder.open();
 structureFolder.open();
 loadFolder.open();
+
+// ---------- click-to-place point load ----------
+const pointHintEl = document.getElementById('point-hint');
+function updatePointHint() {
+  const active = params.view === 'Structural analysis' && params.loadMode === 'Point';
+  pointHintEl.style.display = active ? 'block' : 'none';
+}
+
+const raycaster = new THREE.Raycaster();
+const pointerNDC = new THREE.Vector2();
+let pointerDownPos = null;
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  pointerDownPos = { x: e.clientX, y: e.clientY };
+});
+
+renderer.domElement.addEventListener('pointerup', (e) => {
+  const down = pointerDownPos;
+  pointerDownPos = null;
+  if (!down) return;
+  // ignore drags (orbit/pan) — only treat as a click if the pointer barely moved
+  if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;
+  if (params.view !== 'Structural analysis' || params.loadMode !== 'Point' || !nodeMesh) return;
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNDC, camera);
+
+  const hits = raycaster.intersectObject(nodeMesh);
+  if (hits.length === 0 || hits[0].instanceId == null) return;
+
+  const idx = hits[0].instanceId;
+  const fixed = nodes[idx].fixed;
+  if (fixed && fixed[0] && fixed[1] && fixed[2]) return; // can't usefully load a fixed support node
+
+  pointLoadNodeIndex = idx;
+  solveReferenceAtMaxLoad();
+  resolveAndRender();
+});
 
 cellSizeCtrl.show(params.latticeType === 'Honeycomb');
 poreSizeCtrl.show(params.latticeType === 'Trabecular');

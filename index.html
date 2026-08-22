@@ -69,6 +69,18 @@
     padding: 8px 16px; border-radius: 8px; display: none;
   }
 
+  #point-hint {
+    position: absolute; top: 78px; left: 50%; transform: translateX(-50%); z-index: 10;
+    background: rgba(255,204,51,0.15); border: 1px solid rgba(255,204,51,0.4);
+    color: #ffd764; font-size: 12.5px; padding: 6px 14px; border-radius: 20px;
+    display: none; pointer-events: none; white-space: nowrap;
+  }
+
+  #legend .node-swatch {
+    width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+    background: linear-gradient(135deg, #ffffff, #ff8a1f);
+  }
+
   canvas { display: block; touch-action: none; }
 
   /* ---- mobile / narrow-viewport layout ---- */
@@ -92,6 +104,8 @@
       right: 6px !important;
       --width: min(260px, calc(100vw - 20px)) !important;
     }
+
+    #point-hint { top: auto; bottom: calc(8px + 92px + 8px); font-size: 11px; white-space: normal; text-align: center; max-width: calc(100vw - 40px); }
   }
 
   @media (max-width: 420px) {
@@ -109,9 +123,11 @@
 <div id="info">
   <button class="close" title="Hide">✕</button>
   <div class="body">
-    <b>Structural analysis</b> — base layer fixed, load distributed across the
-    top layer (highlighted, with a yellow arrow showing the push direction),
-    red/blue updates live as you drag any slider.<br/>
+    <b>Structural analysis</b> — base layer fixed. Load placement is either
+    spread across the whole top face, or — switch to <b>Point</b> in the Load
+    panel — pinned to a single node you click on directly. A yellow arrow
+    shows the push direction; rods/walls/nodes all update live as you drag
+    any slider.<br/>
     <b>Cross-section reference</b> — solid 3D models of an actual honeycomb
     cell block and a bone cross-section (cortical shell + spongy interior),
     for visual comparison against the truss idealizations above.
@@ -122,8 +138,11 @@
 <div id="legend">
   <div class="row"><span class="label">Tension (pulling)</span><span class="bar tension-bar"></span></div>
   <div class="row"><span class="label">Compression (pushing)</span><span class="bar compression-bar"></span></div>
+  <div class="row"><span class="label">Joint load (nodes)</span><span class="node-swatch"></span></div>
   <div class="scale">white = ~0 force · saturated = force at max load (20,000 N)</div>
 </div>
+
+<div id="point-hint">📍 Click any non-fixed node to move the load point</div>
 
 <div id="stats">
   <div class="row"><span>Lattice type</span><span id="stat-type">—</span></div>
