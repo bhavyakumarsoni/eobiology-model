@@ -166,9 +166,15 @@ function rebuildNodeInstances() {
   scene.add(nodeMesh);
 }
 
+// Each strut's rest transform, captured once here — Impact Test's shake
+// effect perturbs a strut's position slightly and needs to know what
+// "rest" is in order to spring back to it.
+let strutBaseTransforms = [];
+
 function rebuildStrutInstances() {
   if (strutMesh) scene.remove(strutMesh);
   strutMesh = new THREE.InstancedMesh(UNIT_CYLINDER, strutMaterial, struts.length);
+  strutBaseTransforms = new Array(struts.length);
 
   const start = new THREE.Vector3();
   const end = new THREE.Vector3();
@@ -187,6 +193,12 @@ function rebuildStrutInstances() {
     dummy.scale.set(STRUT_RADIUS, len, STRUT_RADIUS);
     dummy.updateMatrix();
     strutMesh.setMatrixAt(i, dummy.matrix);
+
+    strutBaseTransforms[i] = {
+      px: dummy.position.x, py: dummy.position.y, pz: dummy.position.z,
+      qx: dummy.quaternion.x, qy: dummy.quaternion.y, qz: dummy.quaternion.z, qw: dummy.quaternion.w,
+      len,
+    };
   });
   strutMesh.instanceMatrix.needsUpdate = true;
   scene.add(strutMesh);
@@ -249,16 +261,20 @@ function updateWallColors(strutForces) {
 // hop-distance from the impact point, scaled by velocity — not a full
 // dynamic/explicit-time-integration simulation. It's a visual "how far
 // would a shock plausibly spread through this connectivity" sketch, not
-// a physically simulated impact.
+// a physically simulated impact. The "movement" of the rods during the
+// strike is a cosmetic per-strut shake as the reveal wavefront passes
+// through them, not a physical deformation solve either.
 const IMPACT_BASE_COLORS = { Honeycomb: 0xd7a15c, Trabecular: 0xe6dcc6 };
 const IMPACTOR_GEOMETRIES = {
   Circle: new THREE.SphereGeometry(0.35, 16, 16),
   Triangle: new THREE.ConeGeometry(0.42, 0.65, 3), // 3-sided cone reads as a pyramid/triangle
   Square: new THREE.BoxGeometry(0.6, 0.6, 0.6),
 };
-const IMPACTOR_REST_Y_OFFSET = 0.9; // above the top layer, resting
-const IMPACTOR_TOUCH_Y_OFFSET = 0.08; // above the top layer, at moment of contact
-const IMPACT_ANIM_DURATION = 300; // ms, cosmetic strike animation (down then back up)
+const IMPACTOR_STANDOFF = 0.9; // resting distance from the impact node, along the strike direction
+const IMPACTOR_TOUCH_STANDOFF = 0.15; // distance from the node at moment of contact
+const IMPACT_ANIM_DURATION = 300; // ms, cosmetic down/up strike tween
+const HOP_DURATION_MS = 90; // ms per hop of the propagating reveal wave
+const JITTER_TAIL_HOPS = 1.2; // extra hops the shake gets to settle before the impactor lifts off
 
 const impactorMaterial = new THREE.MeshStandardMaterial({ color: 0x8fd6ff, roughness: 0.3, metalness: 0.25 });
 const impactorMesh = new THREE.Mesh(IMPACTOR_GEOMETRIES.Circle, impactorMaterial);
@@ -268,9 +284,22 @@ function updateImpactorMesh() {
   impactorMesh.geometry = IMPACTOR_GEOMETRIES[params.impactShape];
 }
 
-function updateImpactorPosition() {
-  const topY = (LAYERS - 1) * LAYER_HEIGHT;
-  impactorMesh.position.set(LATTICE_BOUNDS_X / 2, topY + IMPACTOR_REST_Y_OFFSET, LATTICE_BOUNDS_Z / 2);
+// Positions the impactor just outside the given node, offset along the
+// direction from the structure's center to that node — click a top node
+// and it strikes from above; click a side node and it strikes from the
+// side. That radial offset IS the "direction of impact" control.
+const impactRestPos = new THREE.Vector3();
+const impactTouchPos = new THREE.Vector3();
+function positionImpactorAtNode(nodeIndex) {
+  const n = nodes[nodeIndex];
+  const cx = LATTICE_BOUNDS_X / 2, cz = LATTICE_BOUNDS_Z / 2, cy = ((LAYERS - 1) * LAYER_HEIGHT) / 2;
+  const dir = new THREE.Vector3(n.x - cx, n.y - cy, n.z - cz);
+  if (dir.lengthSq() < 1e-6) dir.set(0, 1, 0); // dead-center node: fall back to striking from above
+  dir.normalize();
+
+  impactRestPos.set(n.x + dir.x * IMPACTOR_STANDOFF, n.y + dir.y * IMPACTOR_STANDOFF, n.z + dir.z * IMPACTOR_STANDOFF);
+  impactTouchPos.set(n.x + dir.x * IMPACTOR_TOUCH_STANDOFF, n.y + dir.y * IMPACTOR_TOUCH_STANDOFF, n.z + dir.z * IMPACTOR_TOUCH_STANDOFF);
+  impactorMesh.position.copy(impactRestPos);
 }
 
 function buildAdjacency() {
@@ -298,12 +327,14 @@ function bfsHopDistances(startNode) {
   return hopDist;
 }
 
+let impactOriginNode = null; // which node the impactor is currently aimed at
 let impactHopDist = null;
 let impactRadius = 0;
 let impactActive = false;
+let strutRevealHop = null; // cached per strike: max(hopDist[a], hopDist[b]) per strut, or -1 if unreached
 let pendingImpactHopDist = null;
 let pendingImpactRadius = 0;
-let impactAnimPhase = null; // 'down' | 'up' | null
+let impactAnimPhase = null; // 'down' | 'propagate' | 'up' | null
 let impactAnimStart = 0;
 
 // t in [0,1]: 0 = base material color (edge of / outside the affected
@@ -318,81 +349,169 @@ function impactColorAt(t, target) {
   return target.copy(_impactOrange).lerp(_impactWhite, (t - 0.5) / 0.5);
 }
 
-function impactIntensityAtNode(nodeIndex) {
+// revealHop caps how far the wavefront has traveled so far (Infinity =
+// fully settled/final state); anything beyond it hasn't "arrived" yet.
+function impactIntensityAtNode(nodeIndex, revealHop) {
   if (!impactActive || impactRadius <= 0 || !impactHopDist) return 0;
   const h = impactHopDist[nodeIndex];
-  if (h === -1 || h > impactRadius) return 0;
+  if (h === -1 || h > impactRadius || h > revealHop) return 0;
   return 1 - h / impactRadius;
 }
 
-function impactStrutColor(strutIndex, target) {
+function impactStrutColor(strutIndex, target, revealHop) {
   let t = 0;
-  if (impactActive && impactRadius > 0 && impactHopDist) {
-    const s = struts[strutIndex];
-    const ha = impactHopDist[s.a], hb = impactHopDist[s.b];
-    if (ha !== -1 && hb !== -1 && ha <= impactRadius && hb <= impactRadius) {
-      t = 1 - Math.max(ha, hb) / impactRadius;
-    }
+  if (impactActive && impactRadius > 0 && strutRevealHop) {
+    const h = strutRevealHop[strutIndex];
+    if (h !== -1 && h <= impactRadius && h <= revealHop) t = 1 - h / impactRadius;
   }
   return impactColorAt(t, target);
 }
 
-function updateImpactColors() {
+function updateImpactColors(revealHop = Infinity) {
   _impactBase.set(IMPACT_BASE_COLORS[params.latticeType] || 0xffffff);
 
   if (strutMesh) {
     for (let i = 0; i < struts.length; i++) {
-      impactStrutColor(i, _color);
+      impactStrutColor(i, _color, revealHop);
       strutMesh.setColorAt(i, _color);
     }
     strutMesh.instanceColor.needsUpdate = true;
   }
   if (wallMesh) {
     for (let i = 0; i < wallIndices.length; i++) {
-      impactStrutColor(wallIndices[i], _color);
+      impactStrutColor(wallIndices[i], _color, revealHop);
       wallMesh.setColorAt(i, _color);
     }
     wallMesh.instanceColor.needsUpdate = true;
   }
   if (nodeMesh) {
     for (let i = 0; i < nodes.length; i++) {
-      impactColorAt(impactIntensityAtNode(i), _color);
+      impactColorAt(impactIntensityAtNode(i, revealHop), _color);
       nodeMesh.setColorAt(i, _color);
     }
     nodeMesh.instanceColor.needsUpdate = true;
   }
 }
 
-function strikeImpact() {
-  if (params.simMode !== 'Impact Test' || impactAnimPhase) return;
+function cacheStrutRevealHops() {
+  strutRevealHop = new Int32Array(struts.length);
+  for (let i = 0; i < struts.length; i++) {
+    const s = struts[i];
+    const ha = impactHopDist[s.a], hb = impactHopDist[s.b];
+    strutRevealHop[i] = (ha === -1 || hb === -1) ? -1 : Math.max(ha, hb);
+  }
+}
 
-  // impact node = top-layer node closest to the impactor's X/Z (it's
-  // fixed centered over the structure, so this is deterministic)
-  const impactNode = pickDefaultPointLoadNode();
-  pendingImpactHopDist = bfsHopDistances(impactNode);
+// "Movement of the rods": a small shake on struts near the wavefront as
+// it passes through them, decaying quickly behind the front, springing
+// back to their exact rest transform once it's moved on.
+const JITTER_AMPLITUDE = 0.035;
+const JITTER_BAND = 1.2; // hops of trailing shake behind the front
+const _jitterVec = new THREE.Vector3();
+
+function setStrutInstanceTransform(i, jitterOffset) {
+  const bt = strutBaseTransforms[i];
+  dummy.position.set(bt.px, bt.py, bt.pz);
+  if (jitterOffset) dummy.position.add(jitterOffset);
+  dummy.quaternion.set(bt.qx, bt.qy, bt.qz, bt.qw);
+  dummy.scale.set(STRUT_RADIUS, bt.len, STRUT_RADIUS);
+  dummy.updateMatrix();
+  strutMesh.setMatrixAt(i, dummy.matrix);
+}
+
+function applyStrutJitter(currentHop) {
+  if (!strutRevealHop || !strutMesh) return;
+  const tSec = performance.now() * 0.02;
+  for (let i = 0; i < struts.length; i++) {
+    const h = strutRevealHop[i];
+    if (h === -1 || h > impactRadius) continue; // never touched by this strike — leave at rest
+    const behind = currentHop - h;
+    if (behind < 0 || behind > JITTER_BAND) {
+      setStrutInstanceTransform(i, null); // not reached yet, or shake has settled — rest transform
+    } else {
+      const amp = JITTER_AMPLITUDE * (1 - behind / JITTER_BAND);
+      const seed = i * 12.9898;
+      _jitterVec.set(
+        Math.sin(tSec + seed) * amp,
+        Math.sin(tSec * 1.3 + seed) * amp * 0.6,
+        Math.cos(tSec + seed) * amp
+      );
+      setStrutInstanceTransform(i, _jitterVec);
+    }
+  }
+  strutMesh.instanceMatrix.needsUpdate = true;
+}
+
+function resetStrutJitter() {
+  if (!strutMesh || strutBaseTransforms.length !== struts.length) return;
+  for (let i = 0; i < struts.length; i++) setStrutInstanceTransform(i, null);
+  strutMesh.instanceMatrix.needsUpdate = true;
+}
+
+function strikeImpact() {
+  if (params.simMode !== 'Impact Test' || impactAnimPhase || impactOriginNode == null) return;
+
+  pendingImpactHopDist = bfsHopDistances(impactOriginNode);
   pendingImpactRadius = Math.ceil(params.impactVelocity / 2); // 0-20 velocity -> 0-10 hops
 
   impactAnimPhase = 'down';
   impactAnimStart = performance.now();
 }
 
+function resetImpact() {
+  impactAnimPhase = null;
+  impactActive = false;
+  impactHopDist = null;
+  strutRevealHop = null;
+  resetStrutJitter();
+  if (impactOriginNode != null) positionImpactorAtNode(impactOriginNode);
+  updateImpactColors();
+}
+
+// Called whenever Impact Test stops being the active mode (view switch,
+// or switching back to Static Load) — a mid-flight strike's jitter is a
+// direct matrix/position perturbation, not just a color, so it has to be
+// explicitly stopped or it keeps wobbling struts that Static Load is now
+// trying to show with force-based coloring.
+function cancelImpactAnimation() {
+  if (!impactAnimPhase) return;
+  resetStrutJitter();
+  if (impactOriginNode != null) positionImpactorAtNode(impactOriginNode);
+  impactAnimPhase = null;
+  if (impactActive) updateImpactColors(); // land on a clean final state, not a half-revealed one
+}
+
 function updateImpactAnimation() {
   if (!impactAnimPhase) return;
-  const topY = (LAYERS - 1) * LAYER_HEIGHT;
-  const t = Math.min((performance.now() - impactAnimStart) / IMPACT_ANIM_DURATION, 1);
+  const now = performance.now();
+  const elapsed = now - impactAnimStart;
 
   if (impactAnimPhase === 'down') {
-    impactorMesh.position.y = topY + IMPACTOR_REST_Y_OFFSET + (IMPACTOR_TOUCH_Y_OFFSET - IMPACTOR_REST_Y_OFFSET) * t;
+    const t = Math.min(elapsed / IMPACT_ANIM_DURATION, 1);
+    impactorMesh.position.lerpVectors(impactRestPos, impactTouchPos, t);
     if (t >= 1) {
       impactHopDist = pendingImpactHopDist;
       impactRadius = pendingImpactRadius;
       impactActive = true;
-      updateImpactColors();
+      cacheStrutRevealHops();
+
+      impactAnimPhase = impactRadius > 0 ? 'propagate' : 'up';
+      if (impactRadius <= 0) updateImpactColors(); // 0-velocity strike: nothing to reveal
+      impactAnimStart = now;
+    }
+  } else if (impactAnimPhase === 'propagate') {
+    const currentHop = elapsed / HOP_DURATION_MS;
+    updateImpactColors(currentHop);
+    applyStrutJitter(currentHop);
+    if (currentHop >= impactRadius + JITTER_TAIL_HOPS) {
+      resetStrutJitter();
+      updateImpactColors(); // exact final full-reveal state, no float rounding gaps
       impactAnimPhase = 'up';
-      impactAnimStart = performance.now();
+      impactAnimStart = now;
     }
   } else if (impactAnimPhase === 'up') {
-    impactorMesh.position.y = topY + IMPACTOR_TOUCH_Y_OFFSET + (IMPACTOR_REST_Y_OFFSET - IMPACTOR_TOUCH_Y_OFFSET) * t;
+    const t = Math.min(elapsed / IMPACT_ANIM_DURATION, 1);
+    impactorMesh.position.lerpVectors(impactTouchPos, impactRestPos, t);
     if (t >= 1) impactAnimPhase = null;
   }
 }
@@ -544,13 +663,15 @@ function regenerateLattice() {
   buildAdjacency();
   solveReferenceAtMaxLoad();
   applyRenderStyle();
-  updateImpactorPosition();
 
-  // topology changed — any previous strike's hop-distances no longer
-  // correspond to real nodes/struts, and a mid-flight strike animation
-  // would be animating toward a lattice that no longer exists
+  // topology changed — any previous strike's hop-distances/origin no
+  // longer correspond to real nodes/struts, and a mid-flight strike
+  // animation would be animating toward a lattice that no longer exists
+  impactOriginNode = pickDefaultPointLoadNode();
+  positionImpactorAtNode(impactOriginNode);
   impactActive = false;
   impactHopDist = null;
+  strutRevealHop = null;
   impactAnimPhase = null;
 
   if (!Number.isFinite(colorScaleMax) || colorScaleMax <= 1e-9) {
@@ -646,6 +767,8 @@ function applySimMode() {
   const structural = params.view === 'Structural analysis';
   const staticMode = structural && params.simMode === 'Static Load';
   const impactMode = structural && params.simMode === 'Impact Test';
+
+  if (!impactMode) cancelImpactAnimation();
 
   loadFolder.show(staticMode);
   impactFolder.show(impactMode);
@@ -759,17 +882,30 @@ impactFolder.add(params, 'impactVelocity', 0, 20, 0.5)
   .name('Impact velocity');
 impactFolder.add({ strike: () => strikeImpact() }, 'strike')
   .name('Strike ⚡');
+impactFolder.add({ reset: () => resetImpact() }, 'reset')
+  .name('Reset ↺');
 
 viewFolder.open();
 structureFolder.open();
 loadFolder.open();
 impactFolder.open();
 
-// ---------- click-to-place point load ----------
+// ---------- click-to-place point load / click-to-aim impact ----------
 const pointHintEl = document.getElementById('point-hint');
 function updatePointHint() {
-  const active = params.view === 'Structural analysis' && params.simMode === 'Static Load' && params.loadMode === 'Point';
-  pointHintEl.style.display = active ? 'block' : 'none';
+  const structural = params.view === 'Structural analysis';
+  const staticPointMode = structural && params.simMode === 'Static Load' && params.loadMode === 'Point';
+  const impactMode = structural && params.simMode === 'Impact Test';
+
+  if (staticPointMode) {
+    pointHintEl.textContent = '📍 Click any non-fixed node to move the load point';
+    pointHintEl.style.display = 'block';
+  } else if (impactMode) {
+    pointHintEl.textContent = '🎯 Click any node to aim the impactor from that direction';
+    pointHintEl.style.display = 'block';
+  } else {
+    pointHintEl.style.display = 'none';
+  }
 }
 
 const raycaster = new THREE.Raycaster();
@@ -786,7 +922,11 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   if (!down) return;
   // ignore drags (orbit/pan) — only treat as a click if the pointer barely moved
   if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;
-  if (params.view !== 'Structural analysis' || params.simMode !== 'Static Load' || params.loadMode !== 'Point' || !nodeMesh) return;
+  if (params.view !== 'Structural analysis' || !nodeMesh) return;
+
+  const staticPointMode = params.simMode === 'Static Load' && params.loadMode === 'Point';
+  const impactMode = params.simMode === 'Impact Test';
+  if (!staticPointMode && !impactMode) return;
 
   const rect = renderer.domElement.getBoundingClientRect();
   pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -795,14 +935,20 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 
   const hits = raycaster.intersectObject(nodeMesh);
   if (hits.length === 0 || hits[0].instanceId == null) return;
-
   const idx = hits[0].instanceId;
-  const fixed = nodes[idx].fixed;
-  if (fixed && fixed[0] && fixed[1] && fixed[2]) return; // can't usefully load a fixed support node
 
-  pointLoadNodeIndex = idx;
-  solveReferenceAtMaxLoad();
-  resolveAndRender();
+  if (staticPointMode) {
+    const fixed = nodes[idx].fixed;
+    if (fixed && fixed[0] && fixed[1] && fixed[2]) return; // can't usefully load a fixed support node
+    pointLoadNodeIndex = idx;
+    solveReferenceAtMaxLoad();
+    resolveAndRender();
+  } else if (impactMode && !impactAnimPhase) {
+    // aiming mid-strike would yank the impactor out from under an
+    // in-flight animation, so ignore aim clicks until it settles
+    impactOriginNode = idx;
+    positionImpactorAtNode(idx);
+  }
 });
 
 cellSizeCtrl.show(params.latticeType === 'Honeycomb');
@@ -818,7 +964,9 @@ applyView();
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
-  updateImpactAnimation();
+  if (params.view === 'Structural analysis' && params.simMode === 'Impact Test') {
+    updateImpactAnimation();
+  }
 
   if (params.view === 'Structural analysis') {
     if (regenDirty) {
