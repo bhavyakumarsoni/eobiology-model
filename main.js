@@ -646,7 +646,226 @@ function pickDefaultPointLoadNode() {
   return best;
 }
 
+// ---------- tiling comparison (Honeycomb / Triangle / Square / Circle) ----------
+// Triangle, square, and hexagon can all tile a flat plane with zero
+// gaps; circles cannot (packed circles always leave gaps between them).
+// Among the three tiling shapes, hexagon is mathematically proven (the
+// Honeycomb Conjecture, Thomas Hales, 1999) to need the least total
+// wall material to enclose a given area. That's the claim being shown
+// here — NOT that hexagon wins every structural metric in isolation.
+//
+// The "wall material per unit area" numbers are measured directly off
+// one real interior cell of each shape's actual generated 2D pattern
+// at the current cell size (not a hardcoded formula): a standard
+// planar-graph face-tracing walk finds one real polygon, its perimeter
+// and area are measured from real node positions, and each wall is
+// charged at half its length (since in a real tiling every interior
+// wall is shared by the two cells on either side of it).
+const tilingPanelEl = document.getElementById('tiling-panel');
+const tilingCompareEl = document.getElementById('tiling-compare');
+const tilingCircleNoteEl = document.getElementById('tiling-circle-note');
+
+// Traces the small polygon bordering directed edge (startA -> startB) by
+// repeatedly taking, at each vertex, the next edge in consistent
+// rotational order — the standard technique for extracting one face
+// from a planar straight-line graph.
+function traceFace(nodes2D, adj, startA, startB) {
+  const path = [startA, startB];
+  let prev = startA, curr = startB;
+  const maxSteps = 12; // generous — real cells here have 3-6 sides
+  for (let step = 0; step < maxSteps; step++) {
+    const backAngle = Math.atan2(nodes2D[prev].z - nodes2D[curr].z, nodes2D[prev].x - nodes2D[curr].x);
+    let best = -1, bestDelta = Infinity;
+    for (const w of adj[curr]) {
+      if (w === prev) continue;
+      const angle = Math.atan2(nodes2D[w].z - nodes2D[curr].z, nodes2D[w].x - nodes2D[curr].x);
+      let delta = backAngle - angle;
+      delta = ((delta % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+      if (delta < bestDelta) { bestDelta = delta; best = w; }
+    }
+    if (best === -1) return null; // dead end — hit the pattern's boundary
+    prev = curr;
+    curr = best;
+    path.push(curr);
+    if (curr === startA) return path; // closed the loop
+  }
+  return null;
+}
+
+function measureFace(faceIndices, nodes2D) {
+  const pts = faceIndices[0] === faceIndices[faceIndices.length - 1] ? faceIndices.slice(0, -1) : faceIndices;
+  const n = pts.length;
+  let perimeter = 0;
+  for (let i = 0; i < n; i++) {
+    const a = nodes2D[pts[i]], b = nodes2D[pts[(i + 1) % n]];
+    perimeter += Math.hypot(a.x - b.x, a.z - b.z);
+  }
+  let area2 = 0;
+  for (let i = 0; i < n; i++) {
+    const a = nodes2D[pts[i]], b = nodes2D[pts[(i + 1) % n]];
+    area2 += a.x * b.z - b.x * a.z;
+  }
+  const area = Math.abs(area2) / 2;
+  if (area < 1e-9) return null;
+  return { perimeter, area, materialPerArea: (perimeter / 2) / area, sides: n };
+}
+
+// Generates a throwaway single-layer (2D-only) copy of the pattern at
+// the given cell size purely to measure it — separate from whichever
+// shape is actually selected for 3D display, so all three numbers stay
+// live regardless of which one you're currently looking at.
+function computeTilingStat(generatorFn, cellSize, excludeDiagonals) {
+  const { nodes: n2, struts: s2 } = generatorFn({
+    cellSize, boundsX: LATTICE_BOUNDS_X, boundsZ: LATTICE_BOUNDS_Z, layers: 1, layerHeight: LAYER_HEIGHT,
+  });
+  if (n2.length < 4) return null; // too sparse at this cell size to have an interior cell
+
+  // Square's grid includes one shear-bracing diagonal per cell (see
+  // generators.js) — that's a structural member, not a tiling wall, so
+  // it has to be excluded here. It's reliably the longer edge (side
+  // length vs. side*sqrt(2)), so a length-ratio cutoff separates them
+  // regardless of what cellSize the user has dragged to.
+  let edges = s2.map((s) => {
+    const a = n2[s.a], b = n2[s.b];
+    return { a: s.a, b: s.b, len: Math.hypot(a.x - b.x, a.z - b.z) };
+  });
+  if (excludeDiagonals && edges.length) {
+    const minLen = Math.min(...edges.map((e) => e.len));
+    edges = edges.filter((e) => e.len <= minLen * 1.2);
+  }
+
+  const adj = Array.from({ length: n2.length }, () => []);
+  for (const e of edges) { adj[e.a].push(e.b); adj[e.b].push(e.a); }
+
+  let cx = 0, cz = 0;
+  for (const n of n2) { cx += n.x; cz += n.z; }
+  cx /= n2.length; cz /= n2.length;
+  const byDist = n2
+    .map((n, i) => ({ i, d: (n.x - cx) ** 2 + (n.z - cz) ** 2 }))
+    .sort((a, b) => a.d - b.d);
+
+  // try candidate interior starting points until one traces a clean
+  // small closed face (guards against picking a boundary-adjacent node
+  // whose trace runs off the edge of the generated patch)
+  for (const { i: start } of byDist.slice(0, 15)) {
+    for (const nb of adj[start]) {
+      const face = traceFace(n2, adj, start, nb);
+      if (face && face.length >= 3 && face.length <= 8) {
+        const m = measureFace(face, n2);
+        if (m) return m;
+      }
+    }
+  }
+  return null;
+}
+
+function updateTilingPanel() {
+  const structural = params.view === 'Structural analysis';
+  const staticMode = structural && params.simMode === 'Static Load';
+  const isTilingShape = ['Honeycomb', 'Triangle', 'Square'].includes(params.latticeType);
+  const isCircle = params.latticeType === 'Circle';
+
+  tilingPanelEl.style.display = staticMode && (isTilingShape || isCircle) ? 'block' : 'none';
+  tilingCompareEl.style.display = isTilingShape ? 'block' : 'none';
+  tilingCircleNoteEl.style.display = isCircle ? 'block' : 'none';
+  if (!staticMode || !(isTilingShape || isCircle)) return;
+
+  if (isTilingShape) {
+    const hex = computeTilingStat(generateHoneycombLattice, params.cellSize, false);
+    const tri = computeTilingStat(generateTriangleLattice, params.cellSize, false);
+    const sq = computeTilingStat(generateSquareLattice, params.cellSize, true);
+    document.getElementById('tiling-hex').textContent = hex ? hex.materialPerArea.toFixed(3) : '—';
+    document.getElementById('tiling-tri').textContent = tri ? tri.materialPerArea.toFixed(3) : '—';
+    document.getElementById('tiling-sq').textContent = sq ? sq.materialPerArea.toFixed(3) : '—';
+  }
+}
+
+// ---------- Circle "gaps are unavoidable" overlay ----------
+// A reddish base plane under solid disks at each circle's center —
+// wherever circles don't quite meet, the red shows through, making the
+// unavoidable tiling gaps visible rather than just asserted in text.
+// Centers use the same grid formula generateCircleLattice() itself
+// uses internally (this is a presentation-only overlay, not one of the
+// measured comparison numbers, so recomputing that placement is fine).
+let circleGapGroup = null;
+function ensureCircleGapGroup() {
+  if (circleGapGroup) return;
+  circleGapGroup = new THREE.Group();
+  const gapPlane = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({ color: 0xff3b3b, transparent: true, opacity: 0.55, side: THREE.DoubleSide })
+  );
+  gapPlane.rotation.x = -Math.PI / 2;
+  gapPlane.name = 'gapPlane';
+  circleGapGroup.add(gapPlane);
+
+  const disksMesh = new THREE.InstancedMesh(
+    new THREE.CircleGeometry(1, 24),
+    new THREE.MeshStandardMaterial({ color: 0xb8bec7, roughness: 0.6, metalness: 0.05, side: THREE.DoubleSide }),
+    1 // resized in updateCircleGapOverlay()
+  );
+  disksMesh.name = 'disksMesh';
+  circleGapGroup.add(disksMesh);
+  scene.add(circleGapGroup);
+}
+
+function updateCircleGapOverlay() {
+  const showCircleOverlay = params.view === 'Structural analysis' && params.simMode === 'Static Load' && params.latticeType === 'Circle';
+  if (!showCircleOverlay) {
+    if (circleGapGroup) circleGapGroup.visible = false;
+    return;
+  }
+  ensureCircleGapGroup();
+  circleGapGroup.visible = true;
+
+  const cellSize = params.cellSize;
+  const cols = Math.max(2, Math.round(LATTICE_BOUNDS_X / (1.5 * cellSize)));
+  const rows = Math.max(2, Math.round(LATTICE_BOUNDS_Z / (Math.sqrt(3) * cellSize)));
+  const centers = [];
+  for (let q = 0; q <= cols; q++) {
+    for (let r = 0; r <= rows; r++) {
+      centers.push({
+        x: 1.5 * cellSize * q,
+        z: Math.sqrt(3) * cellSize * (r + 0.5 * (q % 2)),
+      });
+    }
+  }
+  const spacing = cellSize * Math.sqrt(3);
+  const radius = spacing * 0.46; // matches generateCircleLattice()'s own ring radius
+
+  const topY = (LAYERS - 1) * LAYER_HEIGHT;
+  const gapPlane = circleGapGroup.getObjectByName('gapPlane');
+  const width = 1.5 * cellSize * cols + 2 * radius;
+  const depth = Math.sqrt(3) * cellSize * rows + 2 * radius;
+  gapPlane.scale.set(width, depth, 1);
+  gapPlane.position.set(width / 2 - radius, topY - 0.02, depth / 2 - radius);
+
+  let disksMesh = circleGapGroup.getObjectByName('disksMesh');
+  if (disksMesh.count !== centers.length) {
+    circleGapGroup.remove(disksMesh);
+    disksMesh = new THREE.InstancedMesh(disksMesh.geometry, disksMesh.material, centers.length);
+    disksMesh.name = 'disksMesh';
+    circleGapGroup.add(disksMesh);
+  }
+  const dummy2 = new THREE.Object3D();
+  centers.forEach((c, i) => {
+    dummy2.position.set(c.x, topY - 0.01, c.z);
+    dummy2.rotation.set(-Math.PI / 2, 0, 0);
+    dummy2.scale.set(radius, radius, radius);
+    dummy2.updateMatrix();
+    disksMesh.setMatrixAt(i, dummy2.matrix);
+  });
+  disksMesh.instanceMatrix.needsUpdate = true;
+}
+
 // ---------- generation ----------
+const SHAPE_GENERATORS = {
+  Honeycomb: generateHoneycombLattice,
+  Triangle: generateTriangleLattice,
+  Square: generateSquareLattice,
+  Circle: generateCircleLattice,
+};
+
 function regenerateLattice() {
   let result;
   if (params.latticeType === 'Trabecular') {
@@ -659,7 +878,7 @@ function regenerateLattice() {
       DelaunayLib: { Delaunay: d3.Delaunay },
     });
   } else {
-    result = generateHoneycombLattice({
+    result = SHAPE_GENERATORS[params.latticeType]({
       cellSize: params.cellSize,
       boundsX: LATTICE_BOUNDS_X,
       boundsZ: LATTICE_BOUNDS_Z,
@@ -701,6 +920,8 @@ function regenerateLattice() {
   statTypeEl.textContent = params.latticeType;
   statCountEl.textContent = `${nodes.length} / ${struts.length}`;
   updateImpactLegend();
+  updateTilingPanel();
+  updateCircleGapOverlay();
 }
 
 // dispatches to whichever mode's coloring is currently active
@@ -802,6 +1023,9 @@ function applySimMode() {
   legendEl.style.display = staticMode ? 'block' : 'none';
   impactLegendEl.style.display = impactMode ? 'block' : 'none';
   if (impactMode) updateImpactLegend();
+
+  updateTilingPanel();
+  updateCircleGapOverlay();
 }
 
 function applyView() {
@@ -812,7 +1036,7 @@ function applyView() {
 
   structureFolder.show(structural);
   simModeCtrl.show(structural);
-  cellSizeCtrl.show(structural && params.latticeType === 'Honeycomb');
+  cellSizeCtrl.show(structural && params.latticeType !== 'Trabecular');
   poreSizeCtrl.show(structural && params.latticeType === 'Trabecular');
   renderStyleCtrl.show(structural && params.latticeType === 'Honeycomb');
 
@@ -859,10 +1083,10 @@ viewFolder.add({ reset: () => (params.view === 'Structural analysis' ? recenterS
   .name('Reset camera ⟲');
 
 const structureFolder = gui.addFolder('Structure');
-const latticeTypeCtrl = structureFolder.add(params, 'latticeType', ['Honeycomb', 'Trabecular'])
-  .name('Lattice type')
+const latticeTypeCtrl = structureFolder.add(params, 'latticeType', ['Honeycomb', 'Triangle', 'Square', 'Circle', 'Trabecular'])
+  .name('Shape')
   .onChange(() => {
-    cellSizeCtrl.show(params.latticeType === 'Honeycomb');
+    cellSizeCtrl.show(params.latticeType !== 'Trabecular');
     poreSizeCtrl.show(params.latticeType === 'Trabecular');
     renderStyleCtrl.show(params.latticeType === 'Honeycomb');
     requestRegenerate();
@@ -973,7 +1197,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   }
 });
 
-cellSizeCtrl.show(params.latticeType === 'Honeycomb');
+cellSizeCtrl.show(params.latticeType !== 'Trabecular');
 poreSizeCtrl.show(params.latticeType === 'Trabecular');
 renderStyleCtrl.show(params.latticeType === 'Honeycomb');
 

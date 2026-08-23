@@ -90,6 +90,23 @@
   #impact-legend .bar { width: 160px; height: 10px; border-radius: 5px; }
   #impact-legend .scale { color: #8a9099; font-size: 11px; margin-top: 2px; }
 
+  /* same styling family as #info — dark translucent card, rounded,
+     stacked just below it so it never overlaps the GUI panel */
+  #tiling-panel {
+    position: absolute; top: 250px; left: 12px; color: #ddd; z-index: 10;
+    background: rgba(20,20,24,0.75); padding: 10px 14px; border-radius: 8px;
+    font-size: 13px; line-height: 1.5; max-width: 300px; display: none;
+  }
+  #tiling-panel b { color: #fff; }
+  #tiling-panel .row { display: flex; justify-content: space-between; gap: 14px; margin: 3px 0; font-size: 12.5px; }
+  #tiling-panel .row span:first-child { color: #ccc; }
+  #tiling-panel .hint { color: #9aa0a8; font-weight: 400; font-size: 11px; }
+  #tiling-panel .note {
+    display: block; margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,0.12);
+    color: #9aa0a8; font-size: 11.5px;
+  }
+
   canvas { display: block; touch-action: none; }
 
   /* ---- mobile / narrow-viewport layout ---- */
@@ -99,6 +116,7 @@
     #title-bar p { font-size: 10.5px; }
 
     #info { top: 62px; left: 8px; right: 8px; max-width: none; font-size: 12px; padding: 8px 12px; }
+    #tiling-panel { top: 210px; left: 8px; right: 8px; max-width: none; font-size: 12px; padding: 8px 12px; }
 
     #legend, #impact-legend, #stats {
       left: 8px; right: 8px; bottom: 8px; width: auto; min-width: 0;
@@ -141,6 +159,23 @@
     cell block and a bone cross-section (cortical shell + spongy interior),
     for visual comparison against the truss idealizations above.
     <span class="hint">🖱 Drag to orbit · scroll to zoom · right-drag to pan</span>
+  </div>
+</div>
+
+<div id="tiling-panel">
+  <div id="tiling-compare">
+    <b>Wall material per unit area</b> <span class="hint">(lower = more efficient)</span>
+    <div class="row"><span>Hexagon</span><span id="tiling-hex">—</span></div>
+    <div class="row"><span>Triangle</span><span id="tiling-tri">—</span></div>
+    <div class="row"><span>Square</span><span id="tiling-sq">—</span></div>
+    <span class="note">Triangle, square, and hexagon all tile a plane with zero gaps. Among them, hexagon is
+      mathematically proven (Honeycomb Conjecture, Hales 1999) to need the least wall material per unit area.</span>
+  </div>
+  <div id="tiling-circle-note">
+    <b>Circles cannot tile</b><br/>
+    Packed circles always leave gaps between them — unlike triangle, square, and hexagon (the plane's only
+    true regular tessellations), circles can never fully cover a flat area with zero gaps. The red patches
+    below are exactly those uncovered gaps.
   </div>
 </div>
 
