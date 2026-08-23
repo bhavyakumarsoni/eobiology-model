@@ -984,13 +984,16 @@ function recenterCrossSection() {
   camera.position.set(0.5, b.height * 0.8, Math.max(b.width, 6));
 }
 
-// 'Solid walls' is a honeycomb-only rendering choice: same physics, same
-// solve, just draws the hexagon-edge ('wall'-role) struts as flat panels
-// and hides the vertical/diagonal bracing rods + node spheres, since
-// those aren't part of what a real honeycomb cell looks like.
+// 'Solid walls' works for any tiling/packing shape (Honeycomb, Triangle,
+// Square, Circle) — same physics, same solve, just draws the in-layer
+// ('wall'-role) struts as flat panels and hides the vertical/diagonal
+// bracing rods + node spheres, since those aren't part of what a real
+// cell wall looks like. Not offered for Trabecular: real spongy bone is
+// genuinely strut-like, not walled, so a "solid wall" version of it
+// wouldn't represent anything real.
 function applyRenderStyle() {
   const structural = params.view === 'Structural analysis';
-  const wallsMode = structural && params.latticeType === 'Honeycomb' && params.renderStyle === 'Solid walls';
+  const wallsMode = structural && params.latticeType !== 'Trabecular' && params.renderStyle === 'Solid walls';
 
   if (nodeMesh) nodeMesh.visible = structural && !wallsMode;
   if (strutMesh) strutMesh.visible = structural && !wallsMode;
@@ -1038,7 +1041,7 @@ function applyView() {
   simModeCtrl.show(structural);
   cellSizeCtrl.show(structural && params.latticeType !== 'Trabecular');
   poreSizeCtrl.show(structural && params.latticeType === 'Trabecular');
-  renderStyleCtrl.show(structural && params.latticeType === 'Honeycomb');
+  renderStyleCtrl.show(structural && params.latticeType !== 'Trabecular');
 
   if (structural) {
     if (crossSectionGroup) crossSectionGroup.visible = false;
@@ -1088,7 +1091,7 @@ const latticeTypeCtrl = structureFolder.add(params, 'latticeType', ['Honeycomb',
   .onChange(() => {
     cellSizeCtrl.show(params.latticeType !== 'Trabecular');
     poreSizeCtrl.show(params.latticeType === 'Trabecular');
-    renderStyleCtrl.show(params.latticeType === 'Honeycomb');
+    renderStyleCtrl.show(params.latticeType !== 'Trabecular');
     requestRegenerate();
   });
 
@@ -1199,7 +1202,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 
 cellSizeCtrl.show(params.latticeType !== 'Trabecular');
 poreSizeCtrl.show(params.latticeType === 'Trabecular');
-renderStyleCtrl.show(params.latticeType === 'Honeycomb');
+renderStyleCtrl.show(params.latticeType !== 'Trabecular');
 
 // initial build (after GUI controls exist, since applyView()/applySimMode() show/hide them)
 regenerateLattice();

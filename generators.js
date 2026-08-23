@@ -33,23 +33,25 @@ function extrudeLayers({ localNodes, localEdges, layers, layerHeight, E, A }) {
     }
     layerNodeIndices.push(indices);
 
-    // in-layer struts (horizontal bracing at this floor)
+    // in-layer struts (horizontal bracing at this floor) — tagged 'wall'
+    // since these are exactly the edge members the "Solid walls" render
+    // style (main.js) picks out to draw as flat panels instead of rods.
     for (const [i, j] of localEdges) {
-      struts.push({ a: indices[i], b: indices[j], E, A });
+      struts.push({ a: indices[i], b: indices[j], E, A, role: 'wall' });
     }
 
     if (L > 0) {
       const below = layerNodeIndices[L - 1];
       // vertical struts: straight columns floor to floor
       for (let i = 0; i < indices.length; i++) {
-        struts.push({ a: below[i], b: indices[i], E, A });
+        struts.push({ a: below[i], b: indices[i], E, A, role: 'vertical' });
       }
       // diagonal struts: one per in-layer edge, connecting across
       // floors on an angle — this is what actually gives the stack
       // shear stiffness (without this, floors can slide sideways
       // relative to each other for free, i.e. another mechanism)
       for (const [i, j] of localEdges) {
-        struts.push({ a: below[i], b: indices[j], E, A });
+        struts.push({ a: below[i], b: indices[j], E, A, role: 'diagonal' });
       }
     }
   }
