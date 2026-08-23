@@ -102,12 +102,15 @@ const LOAD_MAX = 20000; // N — top of the load slider, also the color-scale ca
 
 const params = {
   view: 'Structural analysis', // 'Structural analysis' | 'Cross-section reference'
+  simMode: 'Static Load',      // 'Static Load' | 'Impact Test' (within Structural analysis)
   latticeType: 'Honeycomb',    // 'Honeycomb' | 'Trabecular'
   renderStyle: 'Rods',         // 'Rods' | 'Solid walls' (honeycomb only)
   loadMode: 'Distributed',     // 'Distributed' (whole top face) | 'Point' (single clicked node)
   cellSize: 1,
   poreSize: 1,
   loadMagnitude: 5000, // N, total, -Y
+  impactShape: 'Circle',       // 'Circle' | 'Triangle' | 'Square'
+  impactVelocity: 10,          // 0-20, arbitrary units
 };
 
 let nodes = [];
@@ -115,6 +118,7 @@ let struts = [];
 let loadNodeIndices = [];
 let nodeIncidentStruts = []; // nodeIncidentStruts[nodeIndex] -> array of strut indices touching it
 let pointLoadNodeIndex = null; // selected node for 'Point' load mode
+let adjacency = []; // adjacency[nodeIndex] -> array of neighbor node indices (for Impact Test's BFS)
 
 // ---------- HUD wiring ----------
 const statTypeEl = document.getElementById('stat-type');
@@ -238,6 +242,159 @@ function updateWallColors(strutForces) {
     wallMesh.setColorAt(i, _color);
   }
   wallMesh.instanceColor.needsUpdate = true;
+}
+
+// ---------- Impact Test ----------
+// Simplified propagation model based on strut connectivity and
+// hop-distance from the impact point, scaled by velocity — not a full
+// dynamic/explicit-time-integration simulation. It's a visual "how far
+// would a shock plausibly spread through this connectivity" sketch, not
+// a physically simulated impact.
+const IMPACT_BASE_COLORS = { Honeycomb: 0xd7a15c, Trabecular: 0xe6dcc6 };
+const IMPACTOR_GEOMETRIES = {
+  Circle: new THREE.SphereGeometry(0.35, 16, 16),
+  Triangle: new THREE.ConeGeometry(0.42, 0.65, 3), // 3-sided cone reads as a pyramid/triangle
+  Square: new THREE.BoxGeometry(0.6, 0.6, 0.6),
+};
+const IMPACTOR_REST_Y_OFFSET = 0.9; // above the top layer, resting
+const IMPACTOR_TOUCH_Y_OFFSET = 0.08; // above the top layer, at moment of contact
+const IMPACT_ANIM_DURATION = 300; // ms, cosmetic strike animation (down then back up)
+
+const impactorMaterial = new THREE.MeshStandardMaterial({ color: 0x8fd6ff, roughness: 0.3, metalness: 0.25 });
+const impactorMesh = new THREE.Mesh(IMPACTOR_GEOMETRIES.Circle, impactorMaterial);
+scene.add(impactorMesh);
+
+function updateImpactorMesh() {
+  impactorMesh.geometry = IMPACTOR_GEOMETRIES[params.impactShape];
+}
+
+function updateImpactorPosition() {
+  const topY = (LAYERS - 1) * LAYER_HEIGHT;
+  impactorMesh.position.set(LATTICE_BOUNDS_X / 2, topY + IMPACTOR_REST_Y_OFFSET, LATTICE_BOUNDS_Z / 2);
+}
+
+function buildAdjacency() {
+  adjacency = Array.from({ length: nodes.length }, () => []);
+  for (const s of struts) {
+    adjacency[s.a].push(s.b);
+    adjacency[s.b].push(s.a);
+  }
+}
+
+function bfsHopDistances(startNode) {
+  const hopDist = new Int32Array(nodes.length).fill(-1);
+  hopDist[startNode] = 0;
+  const queue = [startNode];
+  let qi = 0;
+  while (qi < queue.length) {
+    const u = queue[qi++];
+    for (const v of adjacency[u]) {
+      if (hopDist[v] === -1) {
+        hopDist[v] = hopDist[u] + 1;
+        queue.push(v);
+      }
+    }
+  }
+  return hopDist;
+}
+
+let impactHopDist = null;
+let impactRadius = 0;
+let impactActive = false;
+let pendingImpactHopDist = null;
+let pendingImpactRadius = 0;
+let impactAnimPhase = null; // 'down' | 'up' | null
+let impactAnimStart = 0;
+
+// t in [0,1]: 0 = base material color (edge of / outside the affected
+// radius), 1 = white-hot impact center — a distinct ramp from the
+// Static Load mode's red/blue so the two are never ambiguous.
+const _impactBase = new THREE.Color();
+const _impactOrange = new THREE.Color(0xff6a1a);
+const _impactWhite = new THREE.Color(0xffffff);
+function impactColorAt(t, target) {
+  if (t <= 0) return target.copy(_impactBase);
+  if (t < 0.5) return target.copy(_impactBase).lerp(_impactOrange, t / 0.5);
+  return target.copy(_impactOrange).lerp(_impactWhite, (t - 0.5) / 0.5);
+}
+
+function impactIntensityAtNode(nodeIndex) {
+  if (!impactActive || impactRadius <= 0 || !impactHopDist) return 0;
+  const h = impactHopDist[nodeIndex];
+  if (h === -1 || h > impactRadius) return 0;
+  return 1 - h / impactRadius;
+}
+
+function impactStrutColor(strutIndex, target) {
+  let t = 0;
+  if (impactActive && impactRadius > 0 && impactHopDist) {
+    const s = struts[strutIndex];
+    const ha = impactHopDist[s.a], hb = impactHopDist[s.b];
+    if (ha !== -1 && hb !== -1 && ha <= impactRadius && hb <= impactRadius) {
+      t = 1 - Math.max(ha, hb) / impactRadius;
+    }
+  }
+  return impactColorAt(t, target);
+}
+
+function updateImpactColors() {
+  _impactBase.set(IMPACT_BASE_COLORS[params.latticeType] || 0xffffff);
+
+  if (strutMesh) {
+    for (let i = 0; i < struts.length; i++) {
+      impactStrutColor(i, _color);
+      strutMesh.setColorAt(i, _color);
+    }
+    strutMesh.instanceColor.needsUpdate = true;
+  }
+  if (wallMesh) {
+    for (let i = 0; i < wallIndices.length; i++) {
+      impactStrutColor(wallIndices[i], _color);
+      wallMesh.setColorAt(i, _color);
+    }
+    wallMesh.instanceColor.needsUpdate = true;
+  }
+  if (nodeMesh) {
+    for (let i = 0; i < nodes.length; i++) {
+      impactColorAt(impactIntensityAtNode(i), _color);
+      nodeMesh.setColorAt(i, _color);
+    }
+    nodeMesh.instanceColor.needsUpdate = true;
+  }
+}
+
+function strikeImpact() {
+  if (params.simMode !== 'Impact Test' || impactAnimPhase) return;
+
+  // impact node = top-layer node closest to the impactor's X/Z (it's
+  // fixed centered over the structure, so this is deterministic)
+  const impactNode = pickDefaultPointLoadNode();
+  pendingImpactHopDist = bfsHopDistances(impactNode);
+  pendingImpactRadius = Math.ceil(params.impactVelocity / 2); // 0-20 velocity -> 0-10 hops
+
+  impactAnimPhase = 'down';
+  impactAnimStart = performance.now();
+}
+
+function updateImpactAnimation() {
+  if (!impactAnimPhase) return;
+  const topY = (LAYERS - 1) * LAYER_HEIGHT;
+  const t = Math.min((performance.now() - impactAnimStart) / IMPACT_ANIM_DURATION, 1);
+
+  if (impactAnimPhase === 'down') {
+    impactorMesh.position.y = topY + IMPACTOR_REST_Y_OFFSET + (IMPACTOR_TOUCH_Y_OFFSET - IMPACTOR_REST_Y_OFFSET) * t;
+    if (t >= 1) {
+      impactHopDist = pendingImpactHopDist;
+      impactRadius = pendingImpactRadius;
+      impactActive = true;
+      updateImpactColors();
+      impactAnimPhase = 'up';
+      impactAnimStart = performance.now();
+    }
+  } else if (impactAnimPhase === 'up') {
+    impactorMesh.position.y = topY + IMPACTOR_TOUCH_Y_OFFSET + (IMPACTOR_REST_Y_OFFSET - IMPACTOR_TOUCH_Y_OFFSET) * t;
+    if (t >= 1) impactAnimPhase = null;
+  }
 }
 
 function forceToColor(force, maxAbs, target) {
@@ -384,8 +541,17 @@ function regenerateLattice() {
   rebuildStrutInstances();
   rebuildWallInstances();
   buildIncidence();
+  buildAdjacency();
   solveReferenceAtMaxLoad();
   applyRenderStyle();
+  updateImpactorPosition();
+
+  // topology changed — any previous strike's hop-distances no longer
+  // correspond to real nodes/struts, and a mid-flight strike animation
+  // would be animating toward a lattice that no longer exists
+  impactActive = false;
+  impactHopDist = null;
+  impactAnimPhase = null;
 
   if (!Number.isFinite(colorScaleMax) || colorScaleMax <= 1e-9) {
     console.warn(
@@ -396,6 +562,15 @@ function regenerateLattice() {
 
   statTypeEl.textContent = params.latticeType;
   statCountEl.textContent = `${nodes.length} / ${struts.length}`;
+}
+
+// dispatches to whichever mode's coloring is currently active
+function repaint() {
+  if (params.simMode === 'Impact Test') {
+    updateImpactColors();
+  } else {
+    resolveAndRender();
+  }
 }
 
 // ---------- render current load (no solve — scales the cached reference) ----------
@@ -462,20 +637,36 @@ function applyRenderStyle() {
   if (wallMesh) wallMesh.visible = wallsMode;
 
   gridHelper.visible = structural;
-  const pointMode = structural && params.loadMode === 'Point';
-  loadFaceHighlight.visible = structural && !pointMode;
+}
+
+// Static Load and Impact Test share the same rod/wall/node meshes (just
+// repainted differently) but have entirely separate controls and 3D
+// indicators, so this handles which of those show.
+function applySimMode() {
+  const structural = params.view === 'Structural analysis';
+  const staticMode = structural && params.simMode === 'Static Load';
+  const impactMode = structural && params.simMode === 'Impact Test';
+
+  loadFolder.show(staticMode);
+  impactFolder.show(impactMode);
+
+  const pointMode = staticMode && params.loadMode === 'Point';
+  loadFaceHighlight.visible = staticMode && !pointMode;
   pointMarker.visible = pointMode;
-  loadArrow.visible = structural;
+  loadArrow.visible = staticMode;
+
+  impactorMesh.visible = impactMode;
+  updatePointHint();
 }
 
 function applyView() {
   const structural = params.view === 'Structural analysis';
 
   applyRenderStyle();
-  updatePointHint();
+  applySimMode();
 
   structureFolder.show(structural);
-  loadFolder.show(structural);
+  simModeCtrl.show(structural);
   cellSizeCtrl.show(structural && params.latticeType === 'Honeycomb');
   poreSizeCtrl.show(structural && params.latticeType === 'Trabecular');
   renderStyleCtrl.show(structural && params.latticeType === 'Honeycomb');
@@ -483,6 +674,7 @@ function applyView() {
   if (structural) {
     if (crossSectionGroup) crossSectionGroup.visible = false;
     recenterStructural();
+    repaint();
   } else {
     ensureCrossSectionBuilt();
     crossSectionGroup.visible = true;
@@ -512,6 +704,12 @@ const viewFolder = gui.addFolder('View');
 viewFolder.add(params, 'view', ['Structural analysis', 'Cross-section reference'])
   .name('Mode')
   .onChange(() => applyView());
+const simModeCtrl = viewFolder.add(params, 'simMode', ['Static Load', 'Impact Test'])
+  .name('Test type')
+  .onChange(() => {
+    applySimMode();
+    repaint();
+  });
 viewFolder.add({ reset: () => (params.view === 'Structural analysis' ? recenterStructural() : recenterCrossSection()) }, 'reset')
   .name('Reset camera ⟲');
 
@@ -546,22 +744,31 @@ const loadModeCtrl = loadFolder.add(params, 'loadMode', ['Distributed', 'Point']
     // not a per-frame cost) rather than the load-slider's free rescale.
     solveReferenceAtMaxLoad();
     resolveAndRender();
-    applyRenderStyle();
-    updatePointHint();
+    applySimMode();
   });
 
 const loadCtrl = loadFolder.add(params, 'loadMagnitude', 0, LOAD_MAX, 100)
   .name('Load (N)')
   .onChange(() => requestResolve());
 
+const impactFolder = gui.addFolder('Impact Test');
+impactFolder.add(params, 'impactShape', ['Circle', 'Triangle', 'Square'])
+  .name('Impactor shape')
+  .onChange(() => updateImpactorMesh());
+impactFolder.add(params, 'impactVelocity', 0, 20, 0.5)
+  .name('Impact velocity');
+impactFolder.add({ strike: () => strikeImpact() }, 'strike')
+  .name('Strike ⚡');
+
 viewFolder.open();
 structureFolder.open();
 loadFolder.open();
+impactFolder.open();
 
 // ---------- click-to-place point load ----------
 const pointHintEl = document.getElementById('point-hint');
 function updatePointHint() {
-  const active = params.view === 'Structural analysis' && params.loadMode === 'Point';
+  const active = params.view === 'Structural analysis' && params.simMode === 'Static Load' && params.loadMode === 'Point';
   pointHintEl.style.display = active ? 'block' : 'none';
 }
 
@@ -579,7 +786,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   if (!down) return;
   // ignore drags (orbit/pan) — only treat as a click if the pointer barely moved
   if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;
-  if (params.view !== 'Structural analysis' || params.loadMode !== 'Point' || !nodeMesh) return;
+  if (params.view !== 'Structural analysis' || params.simMode !== 'Static Load' || params.loadMode !== 'Point' || !nodeMesh) return;
 
   const rect = renderer.domElement.getBoundingClientRect();
   pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -602,22 +809,23 @@ cellSizeCtrl.show(params.latticeType === 'Honeycomb');
 poreSizeCtrl.show(params.latticeType === 'Trabecular');
 renderStyleCtrl.show(params.latticeType === 'Honeycomb');
 
-// initial build (after GUI controls exist, since applyView() shows/hides them)
+// initial build (after GUI controls exist, since applyView()/applySimMode() show/hide them)
 regenerateLattice();
-resolveAndRender();
+repaint();
 applyView();
 
 // ---------- render loop ----------
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
+  updateImpactAnimation();
 
   if (params.view === 'Structural analysis') {
     if (regenDirty) {
       regenDirty = false;
       regenerateLattice();
-      resolveAndRender();
-    } else if (resolveDirty) {
+      repaint();
+    } else if (resolveDirty && params.simMode === 'Static Load') {
       resolveDirty = false;
       resolveAndRender();
     }
