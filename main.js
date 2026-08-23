@@ -127,6 +127,10 @@ const statLoadEl = document.getElementById('stat-load');
 const statTensionEl = document.getElementById('stat-tension');
 const statCompressionEl = document.getElementById('stat-compression');
 
+const legendEl = document.getElementById('legend');
+const impactLegendEl = document.getElementById('impact-legend');
+const impactBarEl = document.getElementById('impact-bar');
+
 const infoEl = document.getElementById('info');
 infoEl.querySelector('.close').addEventListener('click', () => {
   infoEl.classList.toggle('collapsed');
@@ -347,6 +351,19 @@ function impactColorAt(t, target) {
   if (t <= 0) return target.copy(_impactBase);
   if (t < 0.5) return target.copy(_impactBase).lerp(_impactOrange, t / 0.5);
   return target.copy(_impactOrange).lerp(_impactWhite, (t - 0.5) / 0.5);
+}
+
+// Builds the legend's gradient directly from the same numeric colors the
+// Three.js material uses (not a hand-picked CSS approximation), so it
+// can never drift out of sync with what's actually on screen — including
+// the base-material end, which depends on the current lattice type.
+function hexToCss(hex) {
+  return '#' + hex.toString(16).padStart(6, '0');
+}
+function updateImpactLegend() {
+  const baseHex = IMPACT_BASE_COLORS[params.latticeType] ?? 0xffffff;
+  impactBarEl.style.background =
+    `linear-gradient(to right, ${hexToCss(_impactWhite.getHex())}, ${hexToCss(_impactOrange.getHex())}, ${hexToCss(baseHex)})`;
 }
 
 // revealHop caps how far the wavefront has traveled so far (Infinity =
@@ -683,6 +700,7 @@ function regenerateLattice() {
 
   statTypeEl.textContent = params.latticeType;
   statCountEl.textContent = `${nodes.length} / ${struts.length}`;
+  updateImpactLegend();
 }
 
 // dispatches to whichever mode's coloring is currently active
@@ -780,6 +798,10 @@ function applySimMode() {
 
   impactorMesh.visible = impactMode;
   updatePointHint();
+
+  legendEl.style.display = staticMode ? 'block' : 'none';
+  impactLegendEl.style.display = impactMode ? 'block' : 'none';
+  if (impactMode) updateImpactLegend();
 }
 
 function applyView() {
