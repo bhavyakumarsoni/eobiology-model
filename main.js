@@ -208,13 +208,25 @@ function rebuildStrutInstances() {
   scene.add(strutMesh);
 }
 
-// ---------- honeycomb "solid walls" render style ----------
-// Renders the same physics (same struts, same solve) as actual hex cell
-// walls instead of rods: one flat panel per 'wall'-role strut (the real
-// hexagon edges — see generators.js), skipping the vertical/diagonal
-// bracing rods and node spheres entirely, since those aren't part of a
-// real honeycomb's visible structure, just the extra members a 3D
-// pin-jointed idealization needs for shear stiffness.
+// ---------- "solid walls" render style ----------
+// Renders the same physics (same struts, same solve) as actual cell
+// walls instead of rods: one flat panel per real wall edge, skipping
+// the vertical/diagonal bracing rods and node spheres entirely, since
+// those aren't part of a real cell's visible structure, just the extra
+// members a 3D pin-jointed idealization needs for shear stiffness.
+//
+// extrudeLayers() tags every in-layer edge 'wall' uniformly — it has no
+// per-shape knowledge, so for Square that set also includes the
+// diagonal shear-bracing strut (length ~= side*sqrt(2)), and for Circle
+// it also includes the inter-ring connector struts (much longer than
+// the ring's own circumference segments). Neither is a real wall, and
+// rendering them as solid panels would show a false diagonal slicing
+// through every square cell / false bridges between circles. Since the
+// genuine wall edges are reliably the SHORTEST members of the 'wall'
+// set for every one of these shapes (ring segments, triangle/hex/square
+// sides), filtering out anything much longer than the shortest wall
+// edge cleanly removes the bracing/connectors without needing any
+// shape-specific logic.
 const WALL_THICKNESS = 0.06;
 const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
 const wallMaterial = new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.08 });
@@ -226,6 +238,21 @@ function rebuildWallInstances() {
   wallIndices = [];
   for (let i = 0; i < struts.length; i++) {
     if (struts[i].role === 'wall') wallIndices.push(i);
+  }
+  if (wallIndices.length > 0) {
+    let minLen = Infinity;
+    for (const si of wallIndices) {
+      const s = struts[si];
+      const ni = nodes[s.a], nj = nodes[s.b];
+      const len = Math.hypot(nj.x - ni.x, nj.z - ni.z);
+      if (len < minLen) minLen = len;
+    }
+    const cutoff = minLen * 1.2;
+    wallIndices = wallIndices.filter((si) => {
+      const s = struts[si];
+      const ni = nodes[s.a], nj = nodes[s.b];
+      return Math.hypot(nj.x - ni.x, nj.z - ni.z) <= cutoff;
+    });
   }
   if (wallIndices.length === 0) {
     wallMesh = null;
