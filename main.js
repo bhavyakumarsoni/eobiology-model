@@ -109,7 +109,6 @@ const params = {
   cellSize: 1,
   poreSize: 1,
   loadMagnitude: 5000, // N, total, -Y
-  impactShape: 'Circle',       // 'Circle' | 'Triangle' | 'Square'
   impactVelocity: 10,          // 0-20, arbitrary units
 };
 
@@ -218,20 +217,38 @@ function rebuildStrutInstances() {
 // extrudeLayers() tags every in-layer edge 'wall' uniformly — it has no
 // per-shape knowledge, so for Square that set also includes the
 // diagonal shear-bracing strut (length ~= side*sqrt(2)), and for Circle
-// it also includes the inter-ring connector struts (much longer than
-// the ring's own circumference segments). Neither is a real wall, and
-// rendering them as solid panels would show a false diagonal slicing
-// through every square cell / false bridges between circles. Since the
-// genuine wall edges are reliably the SHORTEST members of the 'wall'
-// set for every one of these shapes (ring segments, triangle/hex/square
-// sides), filtering out anything much longer than the shortest wall
-// edge cleanly removes the bracing/connectors without needing any
-// shape-specific logic.
+// it also includes the inter-ring connector struts. Neither is a real
+// wall, and rendering them as solid panels would show a false diagonal
+// slicing through every square cell / stray bridge panels between
+// circles instead of a clean ring.
+//
+// For Square, the diagonal is reliably the LONGEST 'wall'-tagged edge
+// (side = cellSize, diagonal = cellSize*sqrt(2)), so keeping only the
+// shortest-length group works and is shape-agnostic.
+//
+// Circle needed a real bug fix here: its inter-ring connector edges
+// don't have a consistent length (angular discretization from
+// ringSegments=12 means the "closest ring node" to a neighbor isn't
+// always well-aligned, so connectors range anywhere from ~0.14x to
+// ~0.9x cellSize) and can be LONGER than the true ring-segment edges,
+// not shorter — so the old "keep the shortest edges" rule actually kept
+// the connectors and threw away the real ring walls. Fixed by matching
+// against the ring segment's own known chord-length formula instead
+// (mirrors how generateTriangleLattice classifies its own edges by
+// expected length ± tolerance) — ringSegments/radius here must match
+// generateCircleLattice()'s defaults.
 const WALL_THICKNESS = 0.06;
 const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
 const wallMaterial = new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.08 });
 let wallMesh = null;
 let wallIndices = [];
+
+function circleRingSegmentLength(cellSize) {
+  const ringSegments = 12; // must match generateCircleLattice()'s default
+  const spacing = cellSize * Math.sqrt(3);
+  const radius = spacing * 0.46;
+  return 2 * radius * Math.sin(Math.PI / ringSegments);
+}
 
 function rebuildWallInstances() {
   if (wallMesh) scene.remove(wallMesh);
@@ -239,7 +256,17 @@ function rebuildWallInstances() {
   for (let i = 0; i < struts.length; i++) {
     if (struts[i].role === 'wall') wallIndices.push(i);
   }
-  if (wallIndices.length > 0) {
+
+  if (wallIndices.length > 0 && params.latticeType === 'Circle') {
+    const target = circleRingSegmentLength(params.cellSize);
+    const tol = target * 0.2;
+    wallIndices = wallIndices.filter((si) => {
+      const s = struts[si];
+      const ni = nodes[s.a], nj = nodes[s.b];
+      const len = Math.hypot(nj.x - ni.x, nj.z - ni.z);
+      return Math.abs(len - target) <= tol;
+    });
+  } else if (wallIndices.length > 0) {
     let minLen = Infinity;
     for (const si of wallIndices) {
       const s = struts[si];
@@ -296,11 +323,7 @@ function updateWallColors(strutForces) {
 // strike is a cosmetic per-strut shake as the reveal wavefront passes
 // through them, not a physical deformation solve either.
 const IMPACT_BASE_COLORS = { Honeycomb: 0xd7a15c, Trabecular: 0xe6dcc6 };
-const IMPACTOR_GEOMETRIES = {
-  Circle: new THREE.SphereGeometry(0.35, 16, 16),
-  Triangle: new THREE.ConeGeometry(0.42, 0.65, 3), // 3-sided cone reads as a pyramid/triangle
-  Square: new THREE.BoxGeometry(0.6, 0.6, 0.6),
-};
+const IMPACTOR_GEOMETRY = new THREE.SphereGeometry(0.35, 16, 16); // always a ball — no shape selection
 const IMPACTOR_STANDOFF = 0.9; // resting distance from the impact node, along the strike direction
 const IMPACTOR_TOUCH_STANDOFF = 0.15; // distance from the node at moment of contact
 const IMPACT_ANIM_DURATION = 300; // ms, cosmetic down/up strike tween
@@ -308,12 +331,8 @@ const HOP_DURATION_MS = 90; // ms per hop of the propagating reveal wave
 const JITTER_TAIL_HOPS = 1.2; // extra hops the shake gets to settle before the impactor lifts off
 
 const impactorMaterial = new THREE.MeshStandardMaterial({ color: 0x8fd6ff, roughness: 0.3, metalness: 0.25 });
-const impactorMesh = new THREE.Mesh(IMPACTOR_GEOMETRIES.Circle, impactorMaterial);
+const impactorMesh = new THREE.Mesh(IMPACTOR_GEOMETRY, impactorMaterial);
 scene.add(impactorMesh);
-
-function updateImpactorMesh() {
-  impactorMesh.geometry = IMPACTOR_GEOMETRIES[params.impactShape];
-}
 
 // Positions the impactor just outside the given node, offset along the
 // direction from the structure's center to that node — click a top node
@@ -1151,9 +1170,6 @@ const loadCtrl = loadFolder.add(params, 'loadMagnitude', 0, LOAD_MAX, 100)
   .onChange(() => requestResolve());
 
 const impactFolder = gui.addFolder('Impact Test');
-impactFolder.add(params, 'impactShape', ['Circle', 'Triangle', 'Square'])
-  .name('Impactor shape')
-  .onChange(() => updateImpactorMesh());
 impactFolder.add(params, 'impactVelocity', 0, 20, 0.5)
   .name('Impact velocity');
 impactFolder.add({ strike: () => strikeImpact() }, 'strike')
