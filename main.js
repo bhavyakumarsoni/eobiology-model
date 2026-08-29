@@ -102,7 +102,7 @@ const LOAD_MAX = 20000; // N — top of the load slider, also the color-scale ca
 
 const params = {
   view: 'Structural analysis', // 'Structural analysis' | 'Cross-section reference'
-  simMode: 'Static Load',      // 'Static Load' | 'Impact Test' (within Structural analysis)
+  simMode: 'Static Load',      // 'Static Load' | 'Impact Test' | 'Compare' (within Structural analysis)
   latticeType: 'Honeycomb',    // 'Honeycomb' | 'Trabecular'
   renderStyle: 'Rods',         // 'Rods' | 'Solid walls' (honeycomb only)
   loadMode: 'Distributed',     // 'Distributed' (whole top face) | 'Point' (single clicked node)
@@ -110,6 +110,9 @@ const params = {
   poreSize: 1,
   loadMagnitude: 5000, // N, total, -Y
   impactVelocity: 10,          // 0-20, arbitrary units
+  compareShapeA: 'Honeycomb',  // 'Honeycomb' | 'Triangle' | 'Square' | 'Circle'
+  compareShapeB: 'Triangle',
+  compareCellSize: 1,
 };
 
 let nodes = [];
@@ -128,6 +131,7 @@ const statCompressionEl = document.getElementById('stat-compression');
 
 const legendEl = document.getElementById('legend');
 const impactLegendEl = document.getElementById('impact-legend');
+const comparePanelEl = document.getElementById('compare-panel');
 const impactBarEl = document.getElementById('impact-bar');
 
 const infoEl = document.getElementById('info');
@@ -1018,6 +1022,106 @@ function ensureCrossSectionBuilt() {
   scene.add(crossSectionGroup);
 }
 
+// ---------- Compare mode (side-by-side shape math) ----------
+// Two independent lattices rendered side by side, each colored solidly
+// (not by force — there's no load applied here, this is purely about
+// the geometric/structural math: node/strut counts and, for the three
+// true tiling shapes, wall material per unit area). Deliberately
+// separate from the Static Load pipeline rather than trying to make
+// the single nodeMesh/strutMesh/wallMesh globals hold two lattices at
+// once — this mirrors how the Cross-section view is its own
+// self-contained static group.
+const COMPARE_SHAPES = ['Honeycomb', 'Triangle', 'Square', 'Circle'];
+const COMPARE_GAP = 2;
+const COMPARE_COLOR_A = 0x5fd0e0;
+const COMPARE_COLOR_B = 0xffb347;
+const compareDummy = new THREE.Object3D();
+
+function buildCompareSide(shape, cellSize, color, xOffset) {
+  const group = new THREE.Group();
+  const { nodes: n3, struts: s3 } = SHAPE_GENERATORS[shape]({
+    cellSize, boundsX: LATTICE_BOUNDS_X, boundsZ: LATTICE_BOUNDS_Z, layers: LAYERS, layerHeight: LAYER_HEIGHT,
+  });
+
+  const material = new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.15 });
+
+  const sideStrutMesh = new THREE.InstancedMesh(UNIT_CYLINDER, material, s3.length);
+  const start = new THREE.Vector3(), end = new THREE.Vector3(), dir = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+  s3.forEach((s, i) => {
+    const ni = n3[s.a], nj = n3[s.b];
+    start.set(ni.x, ni.y, ni.z);
+    end.set(nj.x, nj.y, nj.z);
+    dir.subVectors(end, start);
+    const len = Math.max(dir.length(), 1e-6);
+    compareDummy.position.copy(start).addScaledVector(dir, 0.5);
+    compareDummy.quaternion.setFromUnitVectors(up, dir.clone().normalize());
+    compareDummy.scale.set(STRUT_RADIUS, len, STRUT_RADIUS);
+    compareDummy.updateMatrix();
+    sideStrutMesh.setMatrixAt(i, compareDummy.matrix);
+  });
+  sideStrutMesh.instanceMatrix.needsUpdate = true;
+  group.add(sideStrutMesh);
+
+  const sideNodeMesh = new THREE.InstancedMesh(NODE_GEO, material, n3.length);
+  n3.forEach((n, i) => {
+    compareDummy.position.set(n.x, n.y, n.z);
+    compareDummy.rotation.set(0, 0, 0);
+    compareDummy.scale.set(NODE_RADIUS, NODE_RADIUS, NODE_RADIUS);
+    compareDummy.updateMatrix();
+    sideNodeMesh.setMatrixAt(i, compareDummy.matrix);
+  });
+  sideNodeMesh.instanceMatrix.needsUpdate = true;
+  group.add(sideNodeMesh);
+
+  group.position.x = xOffset;
+
+  const materialStat = shape === 'Circle'
+    ? null
+    : computeTilingStat(SHAPE_GENERATORS[shape], cellSize, shape === 'Square');
+
+  return { group, nodeCount: n3.length, strutCount: s3.length, materialStat };
+}
+
+let compareGroup = null;
+let compareStatsA = null;
+let compareStatsB = null;
+
+function rebuildCompareGroup() {
+  if (compareGroup) scene.remove(compareGroup);
+  compareGroup = new THREE.Group();
+
+  const a = buildCompareSide(params.compareShapeA, params.compareCellSize, COMPARE_COLOR_A, 0);
+  const b = buildCompareSide(params.compareShapeB, params.compareCellSize, COMPARE_COLOR_B, LATTICE_BOUNDS_X + COMPARE_GAP);
+  compareGroup.add(a.group, b.group);
+  scene.add(compareGroup);
+
+  compareStatsA = a;
+  compareStatsB = b;
+  updateComparePanel();
+}
+
+function updateComparePanel() {
+  document.getElementById('compare-a-swatch').style.background = '#' + COMPARE_COLOR_A.toString(16).padStart(6, '0');
+  document.getElementById('compare-b-swatch').style.background = '#' + COMPARE_COLOR_B.toString(16).padStart(6, '0');
+  document.getElementById('compare-a-name').textContent = params.compareShapeA;
+  document.getElementById('compare-b-name').textContent = params.compareShapeB;
+  document.getElementById('compare-a-nodes').textContent = compareStatsA.nodeCount;
+  document.getElementById('compare-b-nodes').textContent = compareStatsB.nodeCount;
+  document.getElementById('compare-a-struts').textContent = compareStatsA.strutCount;
+  document.getElementById('compare-b-struts').textContent = compareStatsB.strutCount;
+  document.getElementById('compare-a-material').textContent =
+    compareStatsA.materialStat ? compareStatsA.materialStat.materialPerArea.toFixed(3) : 'n/a — no tiling';
+  document.getElementById('compare-b-material').textContent =
+    compareStatsB.materialStat ? compareStatsB.materialStat.materialPerArea.toFixed(3) : 'n/a — no tiling';
+}
+
+function recenterCompare() {
+  const totalWidth = 2 * LATTICE_BOUNDS_X + COMPARE_GAP;
+  const cy = ((LAYERS - 1) * LAYER_HEIGHT) / 2;
+  controls.target.set(totalWidth / 2, cy, LATTICE_BOUNDS_Z / 2);
+  camera.position.set(totalWidth / 2, cy + 11, LATTICE_BOUNDS_Z + 16);
+}
+
 // ---------- view switching ----------
 function recenterStructural() {
   controls.target.set(LATTICE_BOUNDS_X / 2, ((LAYERS - 1) * LAYER_HEIGHT) / 2, LATTICE_BOUNDS_Z / 2);
@@ -1038,14 +1142,14 @@ function recenterCrossSection() {
 // genuinely strut-like, not walled, so a "solid wall" version of it
 // wouldn't represent anything real.
 function applyRenderStyle() {
-  const structural = params.view === 'Structural analysis';
+  const structural = params.view === 'Structural analysis' && params.simMode !== 'Compare';
   const wallsMode = structural && params.latticeType !== 'Trabecular' && params.renderStyle === 'Solid walls';
 
   if (nodeMesh) nodeMesh.visible = structural && !wallsMode;
   if (strutMesh) strutMesh.visible = structural && !wallsMode;
   if (wallMesh) wallMesh.visible = wallsMode;
 
-  gridHelper.visible = structural;
+  gridHelper.visible = params.view === 'Structural analysis';
 }
 
 // Static Load and Impact Test share the same rod/wall/node meshes (just
@@ -1055,11 +1159,14 @@ function applySimMode() {
   const structural = params.view === 'Structural analysis';
   const staticMode = structural && params.simMode === 'Static Load';
   const impactMode = structural && params.simMode === 'Impact Test';
+  const compareMode = structural && params.simMode === 'Compare';
 
   if (!impactMode) cancelImpactAnimation();
 
   loadFolder.show(staticMode);
   impactFolder.show(impactMode);
+  compareFolder.show(compareMode);
+  structureFolder.show(staticMode || impactMode);
 
   const pointMode = staticMode && params.loadMode === 'Point';
   loadFaceHighlight.visible = staticMode && !pointMode;
@@ -1075,24 +1182,40 @@ function applySimMode() {
 
   updateTilingPanel();
   updateCircleGapOverlay();
+
+  comparePanelEl.style.display = compareMode ? 'block' : 'none';
+  if (compareMode) {
+    ensureCompareBuilt();
+    compareGroup.visible = true;
+    recenterCompare();
+  } else if (compareGroup) {
+    compareGroup.visible = false;
+  }
+}
+
+function ensureCompareBuilt() {
+  if (compareGroup) return;
+  rebuildCompareGroup();
 }
 
 function applyView() {
   const structural = params.view === 'Structural analysis';
+  const nonCompareStructural = structural && params.simMode !== 'Compare';
 
   applyRenderStyle();
   applySimMode();
 
-  structureFolder.show(structural);
   simModeCtrl.show(structural);
-  cellSizeCtrl.show(structural && params.latticeType !== 'Trabecular');
-  poreSizeCtrl.show(structural && params.latticeType === 'Trabecular');
-  renderStyleCtrl.show(structural && params.latticeType !== 'Trabecular');
+  cellSizeCtrl.show(nonCompareStructural && params.latticeType !== 'Trabecular');
+  poreSizeCtrl.show(nonCompareStructural && params.latticeType === 'Trabecular');
+  renderStyleCtrl.show(nonCompareStructural && params.latticeType !== 'Trabecular');
 
   if (structural) {
     if (crossSectionGroup) crossSectionGroup.visible = false;
-    recenterStructural();
-    repaint();
+    if (params.simMode !== 'Compare') {
+      recenterStructural();
+      repaint();
+    }
   } else {
     ensureCrossSectionBuilt();
     crossSectionGroup.visible = true;
@@ -1103,8 +1226,10 @@ function applyView() {
 // ---------- throttled live-update pipeline ----------
 let regenDirty = false;
 let resolveDirty = false;
+let compareDirty = false;
 function requestRegenerate() { regenDirty = true; }
 function requestResolve() { resolveDirty = true; }
+function requestCompareRegenerate() { compareDirty = true; }
 
 // ---------- GUI ----------
 // On narrow/mobile viewports, start with the controls panel collapsed
@@ -1122,14 +1247,18 @@ const viewFolder = gui.addFolder('View');
 viewFolder.add(params, 'view', ['Structural analysis', 'Cross-section reference'])
   .name('Mode')
   .onChange(() => applyView());
-const simModeCtrl = viewFolder.add(params, 'simMode', ['Static Load', 'Impact Test'])
+const simModeCtrl = viewFolder.add(params, 'simMode', ['Static Load', 'Impact Test', 'Compare'])
   .name('Test type')
   .onChange(() => {
     applySimMode();
     repaint();
   });
-viewFolder.add({ reset: () => (params.view === 'Structural analysis' ? recenterStructural() : recenterCrossSection()) }, 'reset')
-  .name('Reset camera ⟲');
+viewFolder.add({
+  reset: () => {
+    if (params.view !== 'Structural analysis') return recenterCrossSection();
+    return params.simMode === 'Compare' ? recenterCompare() : recenterStructural();
+  },
+}, 'reset').name('Reset camera ⟲');
 
 const structureFolder = gui.addFolder('Structure');
 const latticeTypeCtrl = structureFolder.add(params, 'latticeType', ['Honeycomb', 'Triangle', 'Square', 'Circle', 'Trabecular'])
@@ -1177,10 +1306,22 @@ impactFolder.add({ strike: () => strikeImpact() }, 'strike')
 impactFolder.add({ reset: () => resetImpact() }, 'reset')
   .name('Reset ↺');
 
+const compareFolder = gui.addFolder('Compare');
+compareFolder.add(params, 'compareShapeA', COMPARE_SHAPES)
+  .name('Shape A')
+  .onChange(() => requestCompareRegenerate());
+compareFolder.add(params, 'compareShapeB', COMPARE_SHAPES)
+  .name('Shape B')
+  .onChange(() => requestCompareRegenerate());
+compareFolder.add(params, 'compareCellSize', 0.3, 2.5, 0.05)
+  .name('Cell size (both)')
+  .onChange(() => requestCompareRegenerate());
+
 viewFolder.open();
 structureFolder.open();
 loadFolder.open();
 impactFolder.open();
+compareFolder.open();
 
 // ---------- click-to-place point load / click-to-aim impact ----------
 const pointHintEl = document.getElementById('point-hint');
@@ -1261,7 +1402,12 @@ function animate() {
   }
 
   if (params.view === 'Structural analysis') {
-    if (regenDirty) {
+    if (params.simMode === 'Compare') {
+      if (compareDirty) {
+        compareDirty = false;
+        rebuildCompareGroup();
+      }
+    } else if (regenDirty) {
       regenDirty = false;
       regenerateLattice();
       repaint();
