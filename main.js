@@ -1538,11 +1538,11 @@ const renderStyleCtrl = structureFolder.add(params, 'renderStyle', ['Rods', 'Sol
   .onChange(() => applyRenderStyle());
 
 const cellSizeCtrl = structureFolder.add(params, 'cellSize', 0.3, 2.5, 0.05)
-  .name('Cell size')
+  .name('Cell size (m)')
   .onChange(() => requestRegenerate());
 
 const poreSizeCtrl = structureFolder.add(params, 'poreSize', 0.3, 2.5, 0.05)
-  .name('Pore size')
+  .name('Pore size (m)')
   .onChange(() => requestRegenerate());
 
 const loadFolder = gui.addFolder('Load');
@@ -1563,7 +1563,7 @@ const loadCtrl = loadFolder.add(params, 'loadMagnitude', 0, LOAD_MAX, 100)
 
 const impactFolder = gui.addFolder('Impact Test');
 impactFolder.add(params, 'impactVelocity', 0, 20, 0.5)
-  .name('Impact velocity');
+  .name('Impact velocity (m/s)');
 impactFolder.add({ strike: () => strikeImpact() }, 'strike')
   .name('Strike ⚡');
 impactFolder.add({ reset: () => resetImpact() }, 'reset')
@@ -1577,10 +1577,10 @@ compareFolder.add(params, 'compareShapeB', COMPARE_SHAPES)
   .name('Shape B')
   .onChange(() => requestCompareRegenerate());
 compareFolder.add(params, 'compareCellSize', 0.3, 2.5, 0.05)
-  .name('Cell size (both)')
+  .name('Cell size (both, m)')
   .onChange(() => requestCompareRegenerate());
 compareFolder.add(params, 'impactVelocity', 0, 20, 0.5)
-  .name('Impact velocity');
+  .name('Impact velocity (m/s)');
 compareFolder.add({ strike: () => strikeCompareBoth() }, 'strike')
   .name('Strike both ⚡');
 compareFolder.add({ reset: () => resetCompareBoth() }, 'reset')
