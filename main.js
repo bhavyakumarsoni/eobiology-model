@@ -1032,7 +1032,13 @@ function ensureCrossSectionBuilt() {
 // once — this mirrors how the Cross-section view is its own
 // self-contained static group.
 const COMPARE_SHAPES = ['Honeycomb', 'Triangle', 'Square', 'Circle'];
-const COMPARE_GAP = 2;
+// A small gap read as "touching" from the default oblique camera angle —
+// the two structures were never actually overlapping in world space
+// (verified independently), but ~2 units of daylight against ~8-unit-wide
+// structures is easy for dense strut geometry to visually swallow. Wider
+// gap + a flatter, more side-on camera framing (below) makes the
+// separation unambiguous regardless of viewing angle.
+const COMPARE_GAP = 6;
 const COMPARE_COLOR_A = 0x5fd0e0;
 const COMPARE_COLOR_B = 0xffb347;
 const compareDummy = new THREE.Object3D();
@@ -1371,7 +1377,11 @@ function recenterCompare() {
   const totalWidth = 2 * LATTICE_BOUNDS_X + COMPARE_GAP;
   const cy = ((LAYERS - 1) * LAYER_HEIGHT) / 2;
   controls.target.set(totalWidth / 2, cy, LATTICE_BOUNDS_Z / 2);
-  camera.position.set(totalWidth / 2, cy + 11, LATTICE_BOUNDS_Z + 16);
+  // flatter angle than the old steep aerial view (elevation ~15° instead
+  // of ~30°) and pulled back further to fit the wider gap — makes the
+  // separation between the two structures read clearly instead of being
+  // foreshortened by a top-down perspective
+  camera.position.set(totalWidth / 2, cy + 8, LATTICE_BOUNDS_Z + 24);
 }
 
 // ---------- view switching ----------
