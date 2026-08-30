@@ -1037,15 +1037,238 @@ const COMPARE_COLOR_A = 0x5fd0e0;
 const COMPARE_COLOR_B = 0xffb347;
 const compareDummy = new THREE.Object3D();
 
+// Same BFS the main Impact Test uses, just parametrized instead of
+// reading the module-level `adjacency`/`nodes` globals — each compare
+// side needs its own independent copy since two different lattices are
+// live at once.
+function buildAdjacencyFor(nodeCount, struts) {
+  const adj = Array.from({ length: nodeCount }, () => []);
+  for (const s of struts) {
+    adj[s.a].push(s.b);
+    adj[s.b].push(s.a);
+  }
+  return adj;
+}
+function bfsHopDistancesFor(adj, nodeCount, startNode) {
+  const hopDist = new Int32Array(nodeCount).fill(-1);
+  hopDist[startNode] = 0;
+  const queue = [startNode];
+  let qi = 0;
+  while (qi < queue.length) {
+    const u = queue[qi++];
+    for (const v of adj[u]) {
+      if (hopDist[v] === -1) {
+        hopDist[v] = hopDist[u] + 1;
+        queue.push(v);
+      }
+    }
+  }
+  return hopDist;
+}
+
+// top-layer node closest to this side's own center — same idea as
+// pickDefaultPointLoadNode(), just working off a side's local node
+// array instead of the module-level `nodes`/`loadNodeIndices`
+function pickCompareOriginNode(n3) {
+  const cx = LATTICE_BOUNDS_X / 2, cz = LATTICE_BOUNDS_Z / 2;
+  const topY = (LAYERS - 1) * LAYER_HEIGHT;
+  let best = 0, bestD = Infinity;
+  n3.forEach((n, i) => {
+    if (Math.abs(n.y - topY) > 1e-6) return;
+    const d = (n.x - cx) ** 2 + (n.z - cz) ** 2;
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  return best;
+}
+
+// impactorMesh is parented under the side's own group, so authoring its
+// position in the side's LOCAL frame (same frame side.nodes are in)
+// automatically inherits the group's world-space X offset — no manual
+// offset math needed, unlike the single-lattice version.
+function positionCompareImpactor(side, nodeIndex) {
+  const n = side.nodes[nodeIndex];
+  const cx = LATTICE_BOUNDS_X / 2, cz = LATTICE_BOUNDS_Z / 2, cy = ((LAYERS - 1) * LAYER_HEIGHT) / 2;
+  const dir = new THREE.Vector3(n.x - cx, n.y - cy, n.z - cz);
+  if (dir.lengthSq() < 1e-6) dir.set(0, 1, 0);
+  dir.normalize();
+  side.impactRestPos.set(n.x + dir.x * IMPACTOR_STANDOFF, n.y + dir.y * IMPACTOR_STANDOFF, n.z + dir.z * IMPACTOR_STANDOFF);
+  side.impactTouchPos.set(n.x + dir.x * IMPACTOR_TOUCH_STANDOFF, n.y + dir.y * IMPACTOR_TOUCH_STANDOFF, n.z + dir.z * IMPACTOR_TOUCH_STANDOFF);
+  side.impactorMesh.position.copy(side.impactRestPos);
+}
+
+function paintCompareSideSolid(side) {
+  _color.set(side.color);
+  for (let i = 0; i < side.struts.length; i++) side.strutMesh.setColorAt(i, _color);
+  side.strutMesh.instanceColor.needsUpdate = true;
+  for (let i = 0; i < side.nodes.length; i++) side.nodeMesh.setColorAt(i, _color);
+  side.nodeMesh.instanceColor.needsUpdate = true;
+}
+
+function paintCompareSideImpact(side, revealHop) {
+  _impactBase.set(side.color);
+
+  for (let i = 0; i < side.struts.length; i++) {
+    let t = 0;
+    if (side.impactActive && side.impactRadius > 0 && side.strutRevealHop) {
+      const h = side.strutRevealHop[i];
+      if (h !== -1 && h <= side.impactRadius && h <= revealHop) t = 1 - h / side.impactRadius;
+    }
+    impactColorAt(t, _color);
+    side.strutMesh.setColorAt(i, _color);
+  }
+  side.strutMesh.instanceColor.needsUpdate = true;
+
+  for (let i = 0; i < side.nodes.length; i++) {
+    let t = 0;
+    if (side.impactActive && side.impactRadius > 0 && side.impactHopDist) {
+      const h = side.impactHopDist[i];
+      if (h !== -1 && h <= side.impactRadius && h <= revealHop) t = 1 - h / side.impactRadius;
+    }
+    impactColorAt(t, _color);
+    side.nodeMesh.setColorAt(i, _color);
+  }
+  side.nodeMesh.instanceColor.needsUpdate = true;
+}
+
+function cacheCompareRevealHops(side) {
+  side.strutRevealHop = new Int32Array(side.struts.length);
+  for (let i = 0; i < side.struts.length; i++) {
+    const s = side.struts[i];
+    const ha = side.impactHopDist[s.a], hb = side.impactHopDist[s.b];
+    side.strutRevealHop[i] = (ha === -1 || hb === -1) ? -1 : Math.max(ha, hb);
+  }
+}
+
+function setCompareStrutTransform(side, i, jitterOffset) {
+  const bt = side.strutBaseTransforms[i];
+  compareDummy.position.set(bt.px, bt.py, bt.pz);
+  if (jitterOffset) compareDummy.position.add(jitterOffset);
+  compareDummy.quaternion.set(bt.qx, bt.qy, bt.qz, bt.qw);
+  compareDummy.scale.set(STRUT_RADIUS, bt.len, STRUT_RADIUS);
+  compareDummy.updateMatrix();
+  side.strutMesh.setMatrixAt(i, compareDummy.matrix);
+}
+
+function applyCompareJitter(side, currentHop, seedOffset) {
+  if (!side.strutRevealHop) return;
+  const tSec = performance.now() * 0.02;
+  for (let i = 0; i < side.struts.length; i++) {
+    const h = side.strutRevealHop[i];
+    if (h === -1 || h > side.impactRadius) continue;
+    const behind = currentHop - h;
+    if (behind < 0 || behind > JITTER_BAND) {
+      setCompareStrutTransform(side, i, null);
+    } else {
+      const amp = JITTER_AMPLITUDE * (1 - behind / JITTER_BAND);
+      const seed = i * 12.9898 + seedOffset;
+      _jitterVec.set(
+        Math.sin(tSec + seed) * amp,
+        Math.sin(tSec * 1.3 + seed) * amp * 0.6,
+        Math.cos(tSec + seed) * amp
+      );
+      setCompareStrutTransform(side, i, _jitterVec);
+    }
+  }
+  side.strutMesh.instanceMatrix.needsUpdate = true;
+}
+
+function resetCompareJitter(side) {
+  if (!side.strutBaseTransforms) return;
+  for (let i = 0; i < side.struts.length; i++) setCompareStrutTransform(side, i, null);
+  side.strutMesh.instanceMatrix.needsUpdate = true;
+}
+
+function strikeCompareSide(side) {
+  if (!side || side.impactAnimPhase || side.impactOriginNode == null) return;
+  side.pendingImpactHopDist = bfsHopDistancesFor(side.adjacency, side.nodes.length, side.impactOriginNode);
+  side.pendingImpactRadius = Math.ceil(params.impactVelocity / 2);
+  side.impactAnimPhase = 'down';
+  side.impactAnimStart = performance.now();
+}
+function strikeCompareBoth() {
+  strikeCompareSide(compareStatsA);
+  strikeCompareSide(compareStatsB);
+}
+
+function resetCompareSide(side) {
+  if (!side) return;
+  side.impactAnimPhase = null;
+  side.impactActive = false;
+  side.impactHopDist = null;
+  side.strutRevealHop = null;
+  resetCompareJitter(side);
+  if (side.impactOriginNode != null) positionCompareImpactor(side, side.impactOriginNode);
+  paintCompareSideSolid(side);
+}
+function resetCompareBoth() {
+  resetCompareSide(compareStatsA);
+  resetCompareSide(compareStatsB);
+}
+
+// Mirrors cancelImpactAnimation() — stops a mid-flight strike cleanly
+// (jitter is a direct matrix perturbation, so just hiding the group
+// isn't enough) if Compare mode gets left mid-strike.
+function cancelCompareAnimations() {
+  for (const side of [compareStatsA, compareStatsB]) {
+    if (!side || !side.impactAnimPhase) continue;
+    resetCompareJitter(side);
+    if (side.impactOriginNode != null) positionCompareImpactor(side, side.impactOriginNode);
+    side.impactAnimPhase = null;
+    if (side.impactActive) paintCompareSideImpact(side, Infinity);
+  }
+}
+
+function updateCompareSideAnimation(side, seedOffset) {
+  if (!side || !side.impactAnimPhase) return;
+  const now = performance.now();
+  const elapsed = now - side.impactAnimStart;
+
+  if (side.impactAnimPhase === 'down') {
+    const t = Math.min(elapsed / IMPACT_ANIM_DURATION, 1);
+    side.impactorMesh.position.lerpVectors(side.impactRestPos, side.impactTouchPos, t);
+    if (t >= 1) {
+      side.impactHopDist = side.pendingImpactHopDist;
+      side.impactRadius = side.pendingImpactRadius;
+      side.impactActive = true;
+      cacheCompareRevealHops(side);
+      side.impactAnimPhase = side.impactRadius > 0 ? 'propagate' : 'up';
+      if (side.impactRadius <= 0) paintCompareSideImpact(side, Infinity);
+      side.impactAnimStart = now;
+    }
+  } else if (side.impactAnimPhase === 'propagate') {
+    const currentHop = elapsed / HOP_DURATION_MS;
+    paintCompareSideImpact(side, currentHop);
+    applyCompareJitter(side, currentHop, seedOffset);
+    if (currentHop >= side.impactRadius + JITTER_TAIL_HOPS) {
+      resetCompareJitter(side);
+      paintCompareSideImpact(side, Infinity);
+      side.impactAnimPhase = 'up';
+      side.impactAnimStart = now;
+    }
+  } else if (side.impactAnimPhase === 'up') {
+    const t = Math.min(elapsed / IMPACT_ANIM_DURATION, 1);
+    side.impactorMesh.position.lerpVectors(side.impactTouchPos, side.impactRestPos, t);
+    if (t >= 1) side.impactAnimPhase = null;
+  }
+}
+function updateCompareAnimations() {
+  updateCompareSideAnimation(compareStatsA, 0);
+  updateCompareSideAnimation(compareStatsB, 1000); // offset seed so A/B don't shake in lockstep
+}
+
 function buildCompareSide(shape, cellSize, color, xOffset) {
   const group = new THREE.Group();
   const { nodes: n3, struts: s3 } = SHAPE_GENERATORS[shape]({
     cellSize, boundsX: LATTICE_BOUNDS_X, boundsZ: LATTICE_BOUNDS_Z, layers: LAYERS, layerHeight: LAYER_HEIGHT,
   });
 
-  const material = new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.15 });
+  // pure white base so per-instance colors — the solid tint below, and
+  // the impact reveal later — come through undistorted, same reasoning
+  // as the main pipeline's node/strut materials
+  const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4, metalness: 0.15 });
 
   const sideStrutMesh = new THREE.InstancedMesh(UNIT_CYLINDER, material, s3.length);
+  const strutBaseTransforms = new Array(s3.length);
   const start = new THREE.Vector3(), end = new THREE.Vector3(), dir = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
   s3.forEach((s, i) => {
     const ni = n3[s.a], nj = n3[s.b];
@@ -1058,6 +1281,11 @@ function buildCompareSide(shape, cellSize, color, xOffset) {
     compareDummy.scale.set(STRUT_RADIUS, len, STRUT_RADIUS);
     compareDummy.updateMatrix();
     sideStrutMesh.setMatrixAt(i, compareDummy.matrix);
+    strutBaseTransforms[i] = {
+      px: compareDummy.position.x, py: compareDummy.position.y, pz: compareDummy.position.z,
+      qx: compareDummy.quaternion.x, qy: compareDummy.quaternion.y, qz: compareDummy.quaternion.z, qw: compareDummy.quaternion.w,
+      len,
+    };
   });
   sideStrutMesh.instanceMatrix.needsUpdate = true;
   group.add(sideStrutMesh);
@@ -1073,13 +1301,37 @@ function buildCompareSide(shape, cellSize, color, xOffset) {
   sideNodeMesh.instanceMatrix.needsUpdate = true;
   group.add(sideNodeMesh);
 
+  // parented under this side's own group so its position can be
+  // authored in the side's local frame and automatically inherit the
+  // group's world-space X offset
+  const sideImpactorMesh = new THREE.Mesh(IMPACTOR_GEOMETRY, impactorMaterial);
+  group.add(sideImpactorMesh);
+
   group.position.x = xOffset;
 
   const materialStat = shape === 'Circle'
     ? null
     : computeTilingStat(SHAPE_GENERATORS[shape], cellSize, shape === 'Square');
 
-  return { group, nodeCount: n3.length, strutCount: s3.length, materialStat };
+  const side = {
+    group, color,
+    nodes: n3, struts: s3,
+    strutMesh: sideStrutMesh, nodeMesh: sideNodeMesh, impactorMesh: sideImpactorMesh,
+    strutBaseTransforms,
+    adjacency: buildAdjacencyFor(n3.length, s3),
+    nodeCount: n3.length, strutCount: s3.length, materialStat,
+    impactOriginNode: null,
+    impactHopDist: null, impactRadius: 0, impactActive: false, strutRevealHop: null,
+    pendingImpactHopDist: null, pendingImpactRadius: 0,
+    impactAnimPhase: null, impactAnimStart: 0,
+    impactRestPos: new THREE.Vector3(), impactTouchPos: new THREE.Vector3(),
+  };
+
+  side.impactOriginNode = pickCompareOriginNode(n3);
+  positionCompareImpactor(side, side.impactOriginNode);
+  paintCompareSideSolid(side);
+
+  return side;
 }
 
 let compareGroup = null;
@@ -1162,6 +1414,7 @@ function applySimMode() {
   const compareMode = structural && params.simMode === 'Compare';
 
   if (!impactMode) cancelImpactAnimation();
+  if (!compareMode) cancelCompareAnimations();
 
   loadFolder.show(staticMode);
   impactFolder.show(impactMode);
@@ -1316,6 +1569,12 @@ compareFolder.add(params, 'compareShapeB', COMPARE_SHAPES)
 compareFolder.add(params, 'compareCellSize', 0.3, 2.5, 0.05)
   .name('Cell size (both)')
   .onChange(() => requestCompareRegenerate());
+compareFolder.add(params, 'impactVelocity', 0, 20, 0.5)
+  .name('Impact velocity');
+compareFolder.add({ strike: () => strikeCompareBoth() }, 'strike')
+  .name('Strike both ⚡');
+compareFolder.add({ reset: () => resetCompareBoth() }, 'reset')
+  .name('Reset both ↺');
 
 viewFolder.open();
 structureFolder.open();
@@ -1399,6 +1658,9 @@ function animate() {
   controls.update();
   if (params.view === 'Structural analysis' && params.simMode === 'Impact Test') {
     updateImpactAnimation();
+  }
+  if (params.view === 'Structural analysis' && params.simMode === 'Compare') {
+    updateCompareAnimations();
   }
 
   if (params.view === 'Structural analysis') {
