@@ -139,6 +139,40 @@ infoEl.querySelector('.close').addEventListener('click', () => {
   infoEl.classList.toggle('collapsed');
 });
 
+// ---------- Team details panel ----------
+// Simple modal card, independent of the 3D scene — stops pointer/wheel
+// events from reaching OrbitControls or lil-gui underneath while open.
+const teamToggleEl = document.getElementById('team-toggle');
+const teamPanelEl = document.getElementById('team-panel');
+const teamBackdropEl = document.getElementById('team-backdrop');
+const teamCloseEl = teamPanelEl.querySelector('.close');
+
+function openTeamPanel() {
+  teamPanelEl.style.display = 'block';
+  teamBackdropEl.style.display = 'block';
+}
+function closeTeamPanel() {
+  teamPanelEl.style.display = 'none';
+  teamBackdropEl.style.display = 'none';
+}
+
+teamToggleEl.addEventListener('click', () => {
+  if (teamPanelEl.style.display === 'block') {
+    closeTeamPanel();
+  } else {
+    openTeamPanel();
+  }
+});
+teamCloseEl.addEventListener('click', closeTeamPanel);
+teamBackdropEl.addEventListener('click', closeTeamPanel);
+
+// Block the panel from leaking drag/scroll/click events into the canvas
+// (OrbitControls) or any lil-gui widgets stacked behind it.
+['pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mousemove', 'mouseup', 'wheel', 'click', 'touchstart', 'touchmove', 'touchend']
+  .forEach((evt) => {
+    teamPanelEl.addEventListener(evt, (e) => e.stopPropagation());
+  });
+
 // ---------- shared geometry/material + instanced meshes ----------
 // Unit-length cylinder (along +Y), scaled per-instance to each strut's
 // actual length/radius — avoids allocating new GPU geometry per strut.

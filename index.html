@@ -22,15 +22,49 @@
 
   /* top-right is the lil-gui controls panel, so this sits top-left —
      the one clear spot before #info starts at top: 78px */
-  #presentation-link {
+  #top-left-links {
     position: absolute; top: 12px; left: 12px; z-index: 10;
+    display: flex; gap: 8px;
+  }
+  #presentation-link, #team-toggle {
     font-family: 'IBM Plex Mono', monospace, monospace;
     font-size: 12px; letter-spacing: 0.06em; text-decoration: none;
     color: #5fd0e0; background: rgba(20,20,24,0.7);
     border: 1px solid #2a3038; padding: 8px 12px; border-radius: 4px;
     transition: border-color 0.2s, background 0.2s;
+    cursor: pointer; font-weight: inherit;
   }
-  #presentation-link:hover { border-color: #5fd0e0; background: rgba(95,208,224,0.08); }
+  #presentation-link:hover, #team-toggle:hover { border-color: #5fd0e0; background: rgba(95,208,224,0.08); }
+
+  #team-panel {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    z-index: 30; color: #ddd;
+    background: rgba(20,20,24,0.95); padding: 16px 20px; border-radius: 10px;
+    border: 1px solid #2a3038; font-size: 13px; line-height: 1.5;
+    min-width: 280px; max-width: 360px; display: none;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+  #team-panel b { color: #fff; }
+  #team-panel h2 {
+    margin: 0 0 10px; font-size: 15px; color: #fff; font-weight: 600;
+    padding-right: 20px;
+  }
+  #team-panel .close {
+    position: absolute; top: 10px; right: 12px; cursor: pointer;
+    color: #8a9099; font-size: 14px; line-height: 1; background: none;
+    border: none; padding: 4px;
+  }
+  #team-panel .close:hover { color: #fff; }
+  #team-panel .member {
+    padding: 8px 0; border-top: 1px solid rgba(255,255,255,0.1);
+  }
+  #team-panel .member:first-of-type { border-top: none; }
+  #team-panel .member .name { color: #fff; font-weight: 600; font-size: 13px; }
+  #team-panel .member .detail { color: #9aa0a8; font-size: 12px; margin-top: 2px; }
+  #team-backdrop {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 29;
+    background: rgba(0,0,0,0.4); display: none;
+  }
 
   #info {
     position: absolute; top: 78px; left: 12px; color: #ddd; z-index: 10;
@@ -150,9 +184,11 @@
     #title-bar { padding: 10px 8px 6px; }
     #title-bar h1 { font-size: 15px; }
     #title-bar p { font-size: 10.5px; }
-    #presentation-link { left: 8px; font-size: 10.5px; padding: 6px 10px; }
+    #top-left-links { left: 8px; }
+    #presentation-link, #team-toggle { font-size: 10.5px; padding: 6px 10px; }
 
     #info { top: 62px; left: 8px; right: 8px; max-width: none; font-size: 12px; padding: 8px 12px; }
+    #team-panel { min-width: 0; width: calc(100vw - 40px); max-width: calc(100vw - 40px); font-size: 12px; padding: 14px 16px; }
     #tiling-panel { top: 210px; left: 8px; right: 8px; max-width: none; font-size: 12px; padding: 8px 12px; }
     #compare-panel { top: 210px; left: 8px; right: 8px; max-width: none; font-size: 12px; padding: 8px 12px; }
 
@@ -185,7 +221,32 @@
   <p>Honeycomb &amp; trabecular bone-analog lattices, solved live with the direct stiffness method</p>
 </div>
 
-<a id="presentation-link" href="Honeycomb%20and%20Bone%20Load%20Bearing%20Structures.pdf" target="_blank" rel="noopener">VIEW PRESENTATION</a>
+<div id="top-left-links">
+  <a id="presentation-link" href="Honeycomb%20and%20Bone%20Load%20Bearing%20Structures.pdf" target="_blank" rel="noopener">VIEW PRESENTATION</a>
+  <button id="team-toggle" type="button">TEAM</button>
+</div>
+
+<div id="team-backdrop"></div>
+<div id="team-panel">
+  <button class="close" title="Close">✕</button>
+  <h2>Team / Student Details</h2>
+  <div class="member">
+    <div class="name">Bhavyakumar Soni</div>
+    <div class="detail">Roll No: C462 &middot; SAP ID: 70022600173</div>
+  </div>
+  <div class="member">
+    <div class="name">Kavya Chaturvedi</div>
+    <div class="detail">Roll No: C471 &middot; SAP ID: 70022600XXX</div>
+  </div>
+  <div class="member">
+    <div class="name">Paarth Shanbhag</div>
+    <div class="detail">Roll No: C435 &middot; SAP ID: 70022600XXX</div>
+  </div>
+  <div class="member">
+    <div class="name">Anmol Somani</div>
+    <div class="detail">Roll No: C460 &middot; SAP ID: 70022600338</div>
+  </div>
+</div>
 
 <div id="info">
   <button class="close" title="Hide">✕</button>
