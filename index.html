@@ -26,7 +26,7 @@
     position: absolute; top: 12px; left: 12px; z-index: 10;
     display: flex; gap: 8px;
   }
-  #presentation-link, #team-toggle {
+  #top-left-links button, #top-left-links a {
     font-family: 'IBM Plex Mono', monospace, monospace;
     font-size: 12px; letter-spacing: 0.06em; text-decoration: none;
     color: #5fd0e0; background: rgba(20,20,24,0.7);
@@ -34,37 +34,65 @@
     transition: border-color 0.2s, background 0.2s;
     cursor: pointer; font-weight: inherit;
   }
-  #presentation-link:hover, #team-toggle:hover { border-color: #5fd0e0; background: rgba(95,208,224,0.08); }
+  #top-left-links button:hover, #top-left-links a:hover { border-color: #5fd0e0; background: rgba(95,208,224,0.08); }
+  #top-left-links button.active { border-color: #5fd0e0; background: rgba(95,208,224,0.15); color: #fff; }
 
-  #team-panel {
+  #modal-backdrop {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 29;
+    background: rgba(0,0,0,0.5); display: none;
+  }
+
+  .modal-panel {
     position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
     z-index: 30; color: #ddd;
-    background: rgba(20,20,24,0.95); padding: 16px 20px; border-radius: 10px;
+    background: rgba(20,20,24,0.97); padding: 16px 20px; border-radius: 10px;
     border: 1px solid #2a3038; font-size: 13px; line-height: 1.5;
-    min-width: 280px; max-width: 360px; display: none;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    display: none; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
   }
-  #team-panel b { color: #fff; }
-  #team-panel h2 {
+  .modal-panel b { color: #fff; }
+  .modal-panel h2 {
     margin: 0 0 10px; font-size: 15px; color: #fff; font-weight: 600;
     padding-right: 20px;
   }
-  #team-panel .close {
+  .modal-panel .close {
     position: absolute; top: 10px; right: 12px; cursor: pointer;
     color: #8a9099; font-size: 14px; line-height: 1; background: none;
-    border: none; padding: 4px;
+    border: none; padding: 4px; z-index: 1;
   }
-  #team-panel .close:hover { color: #fff; }
+  .modal-panel .close:hover { color: #fff; }
+
+  #team-panel { min-width: 300px; max-width: 420px; }
   #team-panel .member {
-    padding: 8px 0; border-top: 1px solid rgba(255,255,255,0.1);
+    padding: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);
+    display: flex; gap: 10px; align-items: center;
   }
   #team-panel .member:first-of-type { border-top: none; }
-  #team-panel .member .name { color: #fff; font-weight: 600; font-size: 13px; }
-  #team-panel .member .detail { color: #9aa0a8; font-size: 12px; margin-top: 2px; }
-  #team-backdrop {
-    position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 29;
-    background: rgba(0,0,0,0.4); display: none;
+  #team-panel .avatar {
+    width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
+    background: rgba(95,208,224,0.12); border: 1px solid #2a3038;
+    display: flex; align-items: center; justify-content: center;
+    color: #5fd0e0; font-size: 9px; text-align: center; line-height: 1.2;
   }
+  #team-panel .name { color: #fff; font-weight: 600; font-size: 13px; }
+  #team-panel .detail { color: #9aa0a8; font-size: 12px; margin-top: 2px; }
+
+  #research-panel { min-width: 320px; max-width: 460px; max-height: 80vh; overflow-y: auto; }
+  #research-panel h3 { margin: 14px 0 6px; font-size: 12.5px; color: #5fd0e0; letter-spacing: 0.04em; text-transform: uppercase; }
+  #research-panel h3:first-of-type { margin-top: 0; }
+  #research-panel .timeline-row { display: flex; gap: 10px; font-size: 12px; margin: 4px 0; color: #ccc; }
+  #research-panel .timeline-row .yr { color: #5fd0e0; min-width: 48px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  #research-panel ol { margin: 4px 0 0; padding-left: 18px; font-size: 11.5px; color: #b8bcc2; }
+  #research-panel ol li { margin: 6px 0; }
+  #research-panel a { color: #5fd0e0; text-decoration: none; word-break: break-all; }
+  #research-panel a:hover { text-decoration: underline; }
+  #research-panel .repo-link { display: inline-block; margin-top: 10px; }
+
+  #presentation-panel {
+    width: 90vw; height: 90vh; max-width: 1100px; padding: 0;
+    display: none;
+  }
+  #presentation-panel .close { top: 8px; right: 8px; background: rgba(20,20,24,0.8); border-radius: 4px; }
+  #presentation-panel iframe { width: 100%; height: 100%; border: none; border-radius: 10px; display: block; }
 
   #info {
     position: absolute; top: 78px; left: 12px; color: #ddd; z-index: 10;
@@ -184,11 +212,15 @@
     #title-bar { padding: 10px 8px 6px; }
     #title-bar h1 { font-size: 15px; }
     #title-bar p { font-size: 10.5px; }
-    #top-left-links { left: 8px; }
-    #presentation-link, #team-toggle { font-size: 10.5px; padding: 6px 10px; }
+    #top-left-links { left: 8px; flex-wrap: wrap; max-width: calc(100vw - 16px); }
+    #top-left-links button, #top-left-links a { font-size: 10.5px; padding: 6px 10px; }
 
     #info { top: 62px; left: 8px; right: 8px; max-width: none; font-size: 12px; padding: 8px 12px; }
-    #team-panel { min-width: 0; width: calc(100vw - 40px); max-width: calc(100vw - 40px); font-size: 12px; padding: 14px 16px; }
+    #team-panel, #research-panel {
+      min-width: 0; width: calc(100vw - 40px); max-width: calc(100vw - 40px);
+      font-size: 12px; padding: 14px 16px;
+    }
+    #presentation-panel { width: calc(100vw - 24px); height: calc(100vh - 24px); }
     #tiling-panel { top: 210px; left: 8px; right: 8px; max-width: none; font-size: 12px; padding: 8px 12px; }
     #compare-panel { top: 210px; left: 8px; right: 8px; max-width: none; font-size: 12px; padding: 8px 12px; }
 
@@ -222,29 +254,85 @@
 </div>
 
 <div id="top-left-links">
-  <a id="presentation-link" href="Honeycomb%20and%20Bone%20Load%20Bearing%20Structures.pdf" target="_blank" rel="noopener">VIEW PRESENTATION</a>
+  <button id="model-toggle" type="button">MODEL</button>
+  <button id="presentation-toggle" type="button">PRESENTATION</button>
+  <button id="research-toggle" type="button">RESEARCH &amp; DOCS</button>
   <button id="team-toggle" type="button">TEAM</button>
 </div>
 
-<div id="team-backdrop"></div>
-<div id="team-panel">
+<div id="modal-backdrop"></div>
+
+<div id="presentation-panel" class="modal-panel">
+  <button class="close" title="Close">✕</button>
+  <iframe src="Honeycomb%20and%20Bone%20Load%20Bearing%20Structures.pdf" title="Bio-inspired Structural Engineering — presentation"></iframe>
+</div>
+
+<div id="research-panel" class="modal-panel">
+  <button class="close" title="Close">✕</button>
+  <h2>Research &amp; Documentation</h2>
+
+  <h3>Methodology</h3>
+  <p style="margin:4px 0; font-size:12.5px; color:#ccc;">
+    The model is a custom direct-stiffness-method truss solver (solver.js) run live in the
+    browser, feeding layered 3D lattice generators (generators.js) for honeycomb, trabecular
+    (Voronoi-based), triangle, square, and circle structures — all solved and rendered with
+    Three.js. Source and commit history: see the GitHub repository below.
+  </p>
+
+  <h3>Research timeline</h3>
+  <div class="timeline-row"><span class="yr">36 BCE</span><span>Varro notes the hexagonal comb uses the least wax</span></div>
+  <div class="timeline-row"><span class="yr">1892</span><span>Julius Wolff publishes the law of bone transformation</span></div>
+  <div class="timeline-row"><span class="yr">1915</span><span>Junkers patents honeycomb aircraft cores</span></div>
+  <div class="timeline-row"><span class="yr">1987</span><span>Frost's mechanostat: bone adapts to strain</span></div>
+  <div class="timeline-row"><span class="yr">1988</span><span>Bendsøe &amp; Kikuchi launch topology optimisation</span></div>
+  <div class="timeline-row"><span class="yr">1999</span><span>Hales proves the honeycomb conjecture</span></div>
+  <div class="timeline-row"><span class="yr">2008</span><span>Jang &amp; Kim simulate Wolff's law in the femur</span></div>
+  <div class="timeline-row"><span class="yr">2016</span><span>Airbus 3D-prints a bionic partition, 45% lighter</span></div>
+
+  <h3>References</h3>
+  <ol>
+    <li>Wolff, J. (1892). <i>Das Gesetz der Transformation der Knochen.</i> Berlin: A. Hirschwald.</li>
+    <li>Frost, H. M. (1987). Bone "mass" and the "mechanostat": A proposal. <i>The Anatomical Record</i>, 219(1), 1–9.</li>
+    <li>Bendsøe, M. P., &amp; Kikuchi, N. (1988). Generating optimal topologies in structural design using a homogenization method. <i>Computer Methods in Applied Mechanics and Engineering</i>, 71(2), 197–224.</li>
+    <li>Gibson, L. J., &amp; Ashby, M. F. (1997). <i>Cellular Solids: Structure and Properties</i> (2nd ed.). Cambridge University Press.</li>
+    <li>Hales, T. C. (2001). The honeycomb conjecture. <i>Discrete &amp; Computational Geometry</i>, 25, 1–22. <a href="https://doi.org/10.1007/s004540010071" target="_blank" rel="noopener">doi.org/10.1007/s004540010071</a></li>
+    <li>Jang, I. G., &amp; Kim, I. Y. (2008). Computational study of Wolff's law with trabecular architecture in the human proximal femur using topology optimization. <i>Journal of Biomechanics</i>, 41(11), 2353–2361. <a href="https://doi.org/10.1016/j.jbiomech.2008.05.037" target="_blank" rel="noopener">doi.org/10.1016/j.jbiomech.2008.05.037</a></li>
+    <li>Airbus. (2016, March 3). Pioneering bionic 3D printing. <a href="https://www.airbus.com/en/newsroom/news/2016-03-pioneering-bionic-3d-printing" target="_blank" rel="noopener">airbus.com/en/newsroom/…</a></li>
+  </ol>
+
+  <a class="repo-link" href="https://github.com/bhavyakumarsoni/eobiology-model" target="_blank" rel="noopener">&rarr; Full source &amp; documentation on GitHub</a>
+</div>
+
+<div id="team-panel" class="modal-panel">
   <button class="close" title="Close">✕</button>
   <h2>Team / Student Details</h2>
   <div class="member">
-    <div class="name">Bhavyakumar Soni</div>
-    <div class="detail">Roll No: C462 &middot; SAP ID: 70022600173</div>
+    <div class="avatar">PHOTO<br/>SOON</div>
+    <div>
+      <div class="name">Bhavyakumar Soni</div>
+      <div class="detail">Roll No: C462 &middot; SAP ID: 70022600173 &middot; Division: F2</div>
+    </div>
   </div>
   <div class="member">
-    <div class="name">Kavya Chaturvedi</div>
-    <div class="detail">Roll No: C471 &middot; SAP ID: 70022600XXX</div>
+    <div class="avatar">PHOTO<br/>SOON</div>
+    <div>
+      <div class="name">Kavya Chaturvedi</div>
+      <div class="detail">Roll No: C471 &middot; SAP ID: 70022600XXX &middot; Division: F2</div>
+    </div>
   </div>
   <div class="member">
-    <div class="name">Paarth Shanbhag</div>
-    <div class="detail">Roll No: C435 &middot; SAP ID: 70022600XXX</div>
+    <div class="avatar">PHOTO<br/>SOON</div>
+    <div>
+      <div class="name">Paarth Shanbhag</div>
+      <div class="detail">Roll No: C435 &middot; SAP ID: 70022600XXX &middot; Division: F2</div>
+    </div>
   </div>
   <div class="member">
-    <div class="name">Anmol Somani</div>
-    <div class="detail">Roll No: C460 &middot; SAP ID: 70022600338</div>
+    <div class="avatar">PHOTO<br/>SOON</div>
+    <div>
+      <div class="name">Anmol Somani</div>
+      <div class="detail">Roll No: C460 &middot; SAP ID: 70022600338 &middot; Division: F2</div>
+    </div>
   </div>
 </div>
 

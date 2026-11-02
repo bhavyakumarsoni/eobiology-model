@@ -139,38 +139,66 @@ infoEl.querySelector('.close').addEventListener('click', () => {
   infoEl.classList.toggle('collapsed');
 });
 
-// ---------- Team details panel ----------
-// Simple modal card, independent of the 3D scene — stops pointer/wheel
+// ---------- Nav modals: Model / Presentation / Research & Docs / Team ----------
+// Simple modal cards, independent of the 3D scene — stop pointer/wheel
 // events from reaching OrbitControls or lil-gui underneath while open.
-const teamToggleEl = document.getElementById('team-toggle');
-const teamPanelEl = document.getElementById('team-panel');
-const teamBackdropEl = document.getElementById('team-backdrop');
-const teamCloseEl = teamPanelEl.querySelector('.close');
+// "Model" has no panel of its own — clicking it just closes whichever
+// modal is open, returning focus to the live simulation.
+const modalBackdropEl = document.getElementById('modal-backdrop');
+const navButtons = {
+  model: document.getElementById('model-toggle'),
+  presentation: document.getElementById('presentation-toggle'),
+  research: document.getElementById('research-toggle'),
+  team: document.getElementById('team-toggle'),
+};
+const modalPanels = {
+  presentation: document.getElementById('presentation-panel'),
+  research: document.getElementById('research-panel'),
+  team: document.getElementById('team-panel'),
+};
 
-function openTeamPanel() {
-  teamPanelEl.style.display = 'block';
-  teamBackdropEl.style.display = 'block';
-}
-function closeTeamPanel() {
-  teamPanelEl.style.display = 'none';
-  teamBackdropEl.style.display = 'none';
+let activeModal = null;
+
+function closeAllModals() {
+  Object.values(modalPanels).forEach((el) => { el.style.display = 'none'; });
+  Object.values(navButtons).forEach((btn) => btn.classList.remove('active'));
+  modalBackdropEl.style.display = 'none';
+  activeModal = null;
 }
 
-teamToggleEl.addEventListener('click', () => {
-  if (teamPanelEl.style.display === 'block') {
-    closeTeamPanel();
-  } else {
-    openTeamPanel();
-  }
+function openModal(name) {
+  closeAllModals();
+  const panel = modalPanels[name];
+  if (!panel) return; // "model" — nothing to open, just stays closed
+  panel.style.display = name === 'presentation' ? 'block' : 'block';
+  modalBackdropEl.style.display = 'block';
+  navButtons[name].classList.add('active');
+  activeModal = name;
+}
+
+navButtons.model.addEventListener('click', closeAllModals);
+navButtons.presentation.addEventListener('click', () => {
+  activeModal === 'presentation' ? closeAllModals() : openModal('presentation');
 });
-teamCloseEl.addEventListener('click', closeTeamPanel);
-teamBackdropEl.addEventListener('click', closeTeamPanel);
+navButtons.research.addEventListener('click', () => {
+  activeModal === 'research' ? closeAllModals() : openModal('research');
+});
+navButtons.team.addEventListener('click', () => {
+  activeModal === 'team' ? closeAllModals() : openModal('team');
+});
 
-// Block the panel from leaking drag/scroll/click events into the canvas
-// (OrbitControls) or any lil-gui widgets stacked behind it.
+Object.values(modalPanels).forEach((panel) => {
+  panel.querySelector('.close').addEventListener('click', closeAllModals);
+});
+modalBackdropEl.addEventListener('click', closeAllModals);
+
+// Block modals from leaking drag/scroll/click events into the canvas
+// (OrbitControls) or any lil-gui widgets stacked behind them.
 ['pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mousemove', 'mouseup', 'wheel', 'click', 'touchstart', 'touchmove', 'touchend']
   .forEach((evt) => {
-    teamPanelEl.addEventListener(evt, (e) => e.stopPropagation());
+    Object.values(modalPanels).forEach((panel) => {
+      panel.addEventListener(evt, (e) => e.stopPropagation());
+    });
   });
 
 // ---------- shared geometry/material + instanced meshes ----------
