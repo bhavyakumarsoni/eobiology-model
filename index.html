@@ -61,20 +61,24 @@
   }
   .modal-panel .close:hover { color: #fff; }
 
-  #team-panel { min-width: 300px; max-width: 420px; }
-  #team-panel .member {
-    padding: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);
-    display: flex; gap: 10px; align-items: center;
+  #team-panel { min-width: 420px; max-width: 520px; }
+  #team-panel .roster {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
   }
-  #team-panel .member:first-of-type { border-top: none; }
+  #team-panel .member {
+    padding: 4px 0 2px; display: flex; flex-direction: column; align-items: center;
+    text-align: center;
+  }
   #team-panel .avatar {
-    width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
+    width: 96px; height: 96px; border-radius: 50%; flex-shrink: 0;
     background: rgba(95,208,224,0.12); border: 1px solid #2a3038;
     display: flex; align-items: center; justify-content: center;
-    color: #5fd0e0; font-size: 9px; text-align: center; line-height: 1.2;
+    color: #5fd0e0; font-size: 11px; text-align: center; line-height: 1.3;
+    margin-bottom: 10px; overflow: hidden;
   }
+  #team-panel .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
   #team-panel .name { color: #fff; font-weight: 600; font-size: 13px; }
-  #team-panel .detail { color: #9aa0a8; font-size: 12px; margin-top: 2px; }
+  #team-panel .detail { color: #9aa0a8; font-size: 11.5px; margin-top: 4px; line-height: 1.5; }
 
   #research-panel { min-width: 320px; max-width: 460px; max-height: 80vh; overflow-y: auto; }
   #research-panel h3 { margin: 14px 0 6px; font-size: 12.5px; color: #5fd0e0; letter-spacing: 0.04em; text-transform: uppercase; }
@@ -220,6 +224,8 @@
       min-width: 0; width: calc(100vw - 40px); max-width: calc(100vw - 40px);
       font-size: 12px; padding: 14px 16px;
     }
+    #team-panel .roster { grid-template-columns: 1fr 1fr; gap: 10px; }
+    #team-panel .avatar { width: 68px; height: 68px; }
     #presentation-panel { width: calc(100vw - 24px); height: calc(100vh - 24px); }
     #tiling-panel { top: 210px; left: 8px; right: 8px; max-width: none; font-size: 12px; padding: 8px 12px; }
     #compare-panel { top: 210px; left: 8px; right: 8px; max-width: none; font-size: 12px; padding: 8px 12px; }
@@ -306,32 +312,26 @@
 <div id="team-panel" class="modal-panel">
   <button class="close" title="Close">✕</button>
   <h2>Team / Student Details</h2>
-  <div class="member">
-    <div class="avatar">PHOTO<br/>SOON</div>
-    <div>
+  <div class="roster">
+    <div class="member">
+      <div class="avatar">PHOTO<br/>SOON</div>
       <div class="name">Bhavyakumar Soni</div>
-      <div class="detail">Roll No: C462 &middot; SAP ID: 70022600173 &middot; Division: F2</div>
+      <div class="detail">Roll No: C462<br/>SAP ID: 70022600173<br/>Division: F2</div>
     </div>
-  </div>
-  <div class="member">
-    <div class="avatar">PHOTO<br/>SOON</div>
-    <div>
+    <div class="member">
+      <div class="avatar">PHOTO<br/>SOON</div>
       <div class="name">Kavya Chaturvedi</div>
-      <div class="detail">Roll No: C471 &middot; SAP ID: 70022600XXX &middot; Division: F2</div>
+      <div class="detail">Roll No: C471<br/>SAP ID: 70022600XXX<br/>Division: F2</div>
     </div>
-  </div>
-  <div class="member">
-    <div class="avatar">PHOTO<br/>SOON</div>
-    <div>
+    <div class="member">
+      <div class="avatar">PHOTO<br/>SOON</div>
       <div class="name">Paarth Shanbhag</div>
-      <div class="detail">Roll No: C435 &middot; SAP ID: 70022600XXX &middot; Division: F2</div>
+      <div class="detail">Roll No: C435<br/>SAP ID: 70022600XXX<br/>Division: F2</div>
     </div>
-  </div>
-  <div class="member">
-    <div class="avatar">PHOTO<br/>SOON</div>
-    <div>
+    <div class="member">
+      <div class="avatar">PHOTO<br/>SOON</div>
       <div class="name">Anmol Somani</div>
-      <div class="detail">Roll No: C460 &middot; SAP ID: 70022600338 &middot; Division: F2</div>
+      <div class="detail">Roll No: C460<br/>SAP ID: 70022600338<br/>Division: F2</div>
     </div>
   </div>
 </div>
